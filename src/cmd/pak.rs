@@ -1,18 +1,18 @@
 use std::{
+    borrow::Cow,
     fmt::{Debug, Display, Formatter, Write},
     fs,
-    fs::File,
     io::{Cursor, Read, Seek, SeekFrom},
     path::PathBuf,
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
 use argh::FromArgs;
-use binrw::{BinRead, BinReaderExt, BinResult, Endian, NullString};
-use binrw_derive::{binrw, BinWrite};
+use binrw::{BinReaderExt, BinResult, Endian};
+use binrw_derive::binrw;
 use uuid::Uuid;
 
-use crate::util::file::map_file;
+use crate::util::{file::map_file, lzss::decompress};
 
 #[derive(FromArgs, PartialEq, Debug)]
 /// process PAK files
@@ -180,8 +180,8 @@ pub struct AssetDirectoryEntry {
     pub unk1: u32,
     pub unk2: u32,
     pub offset: u64,
+    pub decompressed_size: u64,
     pub size: u64,
-    pub unk3: u64,
 }
 
 #[binrw]
@@ -306,18 +306,30 @@ fn extract(args: ExtractArgs) -> Result<()> {
                 .unwrap_or_else(|| format!("{}", asset_entry.asset_id));
             let filename = format!("{}.{}", name, asset_entry.asset_type);
             let path = args.output.join(filename);
-            // log::info!("Extracting {}", path.display());
-            let mut data = &data
-                [asset_entry.offset as usize..(asset_entry.offset + asset_entry.size) as usize];
-            if asset_entry.asset_type == *b"FMV0" {
-                let (hdr, fmv_data, _) = FormDescriptor::slice(data, Endian::Little)?;
-                // log::info!("{:?}", hdr);
-                data = fmv_data;
-            } else if asset_entry.asset_type == *b"ROOM" {
-                let mut file = File::create("ROOM-format.txt")?;
-                dump_rfrm(&mut file, data, 0)?;
-            }
-            fs::write(path, data)?;
+            log::info!("Extracting {} ({:?})", path.display(), asset_entry);
+            let data: Cow<[u8]> = if asset_entry.size != asset_entry.decompressed_size {
+                let compression_bytes =
+                    &data[asset_entry.offset as usize..asset_entry.offset as usize + 4];
+                let compression_type = u32::from_le_bytes(compression_bytes.try_into().unwrap());
+                log::info!("Decompressing {}", compression_type);
+                let mut out = vec![0u8; asset_entry.decompressed_size as usize];
+                let data = &data[asset_entry.offset as usize + 4
+                    ..(asset_entry.offset + asset_entry.size) as usize];
+                match compression_type {
+                    1 => decompress::<1>(data, &mut out),
+                    2 => decompress::<2>(data, &mut out),
+                    3 => decompress::<3>(data, &mut out),
+                    _ => bail!("Unsupported compression mode {}", compression_type),
+                }
+                Cow::Owned(out)
+            } else {
+                Cow::Borrowed(
+                    &data[asset_entry.offset as usize
+                        ..(asset_entry.offset + asset_entry.size) as usize],
+                )
+            };
+            // TODO strip RFRM header?
+            fs::write(path, &data)?;
         }
     } else {
         bail!("Failed to locate ADIR chunk");
