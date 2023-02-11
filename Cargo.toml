@@ -1,5 +1,5 @@
 [package]
-name = "paktool-rs"
+name = "retrotool"
 version = "0.1.0"
 edition = "2021"
 

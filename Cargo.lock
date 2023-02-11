@@ -222,21 +222,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
 
 [[package]]
-name = "paktool-rs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argh",
- "binrw",
- "binrw_derive",
- "byteorder",
- "env_logger",
- "log",
- "memmap2",
- "uuid",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -270,6 +255,21 @@ name = "regex-syntax"
 version = "0.6.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "456c603be3e8d448b072f410900c09faf164fbce2d480456f50eea6e25f9c848"
+
+[[package]]
+name = "retrotool"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argh",
+ "binrw",
+ "binrw_derive",
+ "byteorder",
+ "env_logger",
+ "log",
+ "memmap2",
+ "uuid",
+]
 
 [[package]]
 name = "rustix"
