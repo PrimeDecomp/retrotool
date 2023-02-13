@@ -1,3 +1,4 @@
+pub mod fmv0;
 pub mod pak;
 pub mod txtr;
 
@@ -7,5 +8,6 @@ use argh::FromArgs;
 #[argh(subcommand)]
 pub enum SubCommand {
     Pak(pak::Args),
-    Txtr(txtr::Args),
+    // Txtr(txtr::Args),
+    Fmv0(fmv0::Args),
 }

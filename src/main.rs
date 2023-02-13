@@ -25,7 +25,8 @@ fn main() {
     let args: TopLevel = argh_version::from_env();
     let result = match args.command {
         SubCommand::Pak(args) => cmd::pak::run(args),
-        SubCommand::Txtr(args) => cmd::txtr::run(args),
+        // SubCommand::Txtr(args) => cmd::txtr::run(args),
+        SubCommand::Fmv0(args) => cmd::fmv0::run(args),
     };
     if let Err(e) = result {
         eprintln!("Failed: {e:?}");

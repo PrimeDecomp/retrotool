@@ -1,8 +1,6 @@
-pub mod adir;
 pub mod chunk;
-pub mod meta;
+pub mod pack;
 pub mod rfrm;
-pub mod strg;
 
 use std::fmt::{Debug, Display, Formatter, Write};
 

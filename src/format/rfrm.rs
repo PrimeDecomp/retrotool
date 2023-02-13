@@ -3,14 +3,10 @@ use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use anyhow::Result;
 use binrw::{binrw, BinReaderExt, BinResult, BinWriterExt, Endian};
 
-use crate::format::FourCC;
+use crate::format::{chunk::ChunkDescriptor, peek_four_cc, FourCC};
 
 // Resource format
 pub const K_CHUNK_RFRM: FourCC = FourCC(*b"RFRM");
-// Package file
-pub const K_FORM_PAK: FourCC = FourCC(*b"PACK");
-// Table of contents
-pub const K_FORM_TOC: FourCC = FourCC(*b"TOCC");
 
 #[binrw]
 #[brw(magic = b"RFRM")]
@@ -52,4 +48,22 @@ impl FormDescriptor {
         w.seek(SeekFrom::Start(end_pos))?;
         Ok(())
     }
+}
+
+/// Recursively dump an RFRM + contained chunks
+#[allow(unused)]
+pub fn dump_rfrm<'a, W: Write>(w: &mut W, data: &'a [u8], indent: usize) -> Result<&'a [u8]> {
+    let (rfrm, mut rfrm_data, remain) = FormDescriptor::slice(data, Endian::Little)?;
+    let indstr = "  ".repeat(indent);
+    writeln!(w, "{indstr}{rfrm:?}")?;
+    while !rfrm_data.is_empty() {
+        if peek_four_cc(rfrm_data) == K_CHUNK_RFRM {
+            rfrm_data = dump_rfrm(w, rfrm_data, indent + 1)?;
+        } else {
+            let (desc, _, remain) = ChunkDescriptor::slice(rfrm_data, Endian::Little)?;
+            writeln!(w, "{indstr}- {desc:?}")?;
+            rfrm_data = remain;
+        }
+    }
+    Ok(remain)
 }

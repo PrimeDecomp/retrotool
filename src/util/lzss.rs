@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 /// https://wiki.axiodl.com/w/LZSS_Compression
 pub fn decompress<const M: u8>(mut input: &[u8], output: &mut [u8]) {
     let group_len = 2usize.pow(M as u32 - 1);

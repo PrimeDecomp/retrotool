@@ -1,14 +1,9 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use binrw::{binrw, io::Cursor, BinReaderExt, BinResult, BinWriterExt, Endian};
 
-use crate::format::{
-    adir::{AssetDirectory, K_CHUNK_ADIR},
-    meta::{Metadata, K_CHUNK_META},
-    strg::{StringTable, K_CHUNK_STRG},
-    FourCC,
-};
+use crate::format::FourCC;
 
 #[binrw]
 #[derive(Clone, Debug)]
@@ -20,8 +15,6 @@ pub struct ChunkDescriptor {
     // but always 0?
     pub skip: u64,
 }
-
-pub const CHUNK_DESCRIPTOR_SIZE: usize = 24;
 
 impl ChunkDescriptor {
     #[inline]
@@ -53,25 +46,5 @@ impl ChunkDescriptor {
         w.write_type(self, e)?;
         w.seek(SeekFrom::Start(end_pos))?;
         Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum ChunkType {
-    AssetDirectory(AssetDirectory),
-    Metadata(Metadata),
-    StringTable(StringTable),
-}
-
-impl ChunkType {
-    #[inline]
-    pub fn read(data: &[u8], kind: FourCC, e: Endian) -> Result<Self> {
-        let mut reader = Cursor::new(data);
-        match kind {
-            K_CHUNK_ADIR => Ok(Self::AssetDirectory(reader.read_type(e)?)),
-            K_CHUNK_META => Ok(Self::Metadata(reader.read_type(e)?)),
-            K_CHUNK_STRG => Ok(Self::StringTable(reader.read_type(e)?)),
-            _ => Err(anyhow!("Unknown chunk type {:?}", kind)),
-        }
     }
 }
