@@ -1,9 +1,19 @@
 [package]
 name = "retrotool"
+description = "Tools for working with Retro game formats."
+authors = ["Luke Street <luke@street.dev>"]
+license = "MIT OR Apache-2.0"
 version = "0.1.0"
 edition = "2021"
+publish = false
+repository = "https://github.com/encounter/retrotool"
+readme = "README.md"
+categories = ["command-line-utilities"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.release]
+lto = "thin"
+panic = "abort"
+strip = "debuginfo"
 
 [dependencies]
 anyhow = "1.0.69"
