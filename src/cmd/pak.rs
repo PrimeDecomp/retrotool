@@ -189,7 +189,7 @@ fn package(args: PackageArgs) -> Result<()> {
             other_version: form.other_version,
         });
     }
-    package.assets.sort_by_key(|a| a.info.entry_idx);
+    package.assets.sort_by_key(|a| a.id);
     let mut file =
         BufWriter::new(File::create(&args.output).with_context(|| {
             format!("Failed to create output file '{}'", args.output.display())

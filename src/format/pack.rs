@@ -46,8 +46,8 @@ pub struct AssetDirectory {
 #[derive(Clone, Debug)]
 pub struct AssetDirectoryEntry {
     pub asset_type: FourCC,
-    #[br(map = Uuid::from_u128)]
-    #[bw(map = Uuid::as_u128)]
+    #[br(map = Uuid::from_bytes_le)]
+    #[bw(map = Uuid::to_bytes_le)]
     pub asset_id: Uuid,
     pub version: u32,
     pub other_version: u32,
@@ -70,8 +70,8 @@ pub struct MetadataTable {
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct MetadataTableEntry {
-    #[br(map = Uuid::from_u128)]
-    #[bw(map = Uuid::as_u128)]
+    #[br(map = Uuid::from_bytes_le)]
+    #[bw(map = Uuid::to_bytes_le)]
     pub asset_id: Uuid,
     pub offset: u32,
 }
@@ -93,8 +93,8 @@ pub struct StringTableEntry {
     #[br(map = FourCC::swap)]
     #[bw(map = |&f| f.swap())]
     pub kind: FourCC,
-    #[br(map = Uuid::from_u128)]
-    #[bw(map = Uuid::as_u128)]
+    #[br(map = Uuid::from_bytes_le)]
+    #[bw(map = Uuid::to_bytes_le)]
     pub asset_id: Uuid,
     #[bw(try_calc = name.len().try_into())]
     pub name_length: u32,
@@ -106,11 +106,10 @@ pub struct StringTableEntry {
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct AssetInfo {
-    #[br(map = Uuid::from_u128)]
-    #[bw(map = Uuid::as_u128)]
+    #[br(map = Uuid::from_bytes_le)]
+    #[bw(map = Uuid::to_bytes_le)]
     pub id: Uuid,
     pub compression_mode: u32,
-    pub entry_idx: u32,
     pub orig_offset: u64,
 }
 
@@ -189,7 +188,7 @@ impl Package<'_> {
 
         let mut package = Package { assets: vec![] };
         if let Some(adir) = adir {
-            for (entry_idx, asset_entry) in adir.entries.iter().enumerate() {
+            for asset_entry in &adir.entries {
                 let mut compression_mode = 0u32;
                 let data: Cow<[u8]> = if asset_entry.size != asset_entry.decompressed_size {
                     let compressed_data = &data[asset_entry.offset as usize
@@ -230,7 +229,6 @@ impl Package<'_> {
                     info: AssetInfo {
                         id: asset_entry.asset_id,
                         compression_mode,
-                        entry_idx: entry_idx as u32,
                         orig_offset: asset_entry.offset,
                     },
                     version: asset_entry.version,
@@ -247,7 +245,11 @@ impl Package<'_> {
         let mut asset_directory = AssetDirectory::default();
         let mut metadata = MetadataTable::default();
         let mut string_table = StringTable::default();
+        let mut last_uuid = Uuid::nil();
         for asset in &self.assets {
+            ensure!(asset.id >= last_uuid, "Assets must be ordered by ID ascending");
+            last_uuid = asset.id;
+
             asset_directory.entries.push(AssetDirectoryEntry {
                 asset_type: asset.kind,
                 asset_id: asset.id,
