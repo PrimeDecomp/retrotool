@@ -9,12 +9,22 @@ use binrw::binrw;
 use crate::array_ref;
 
 #[binrw]
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Default)]
 pub struct FourCC(pub [u8; 4]);
 
 impl FourCC {
     #[inline]
-    const fn swap(self) -> Self { Self([self.0[3], self.0[2], self.0[1], self.0[0]]) }
+    fn from_u32(value: u32) -> Self {
+        Self([(value >> 24) as u8, (value >> 16) as u8, (value >> 8) as u8, value as u8])
+    }
+
+    #[inline]
+    fn as_u32(&self) -> u32 {
+        ((self.0[0] as u32) << 24)
+            | ((self.0[1] as u32) << 16)
+            | ((self.0[2] as u32) << 8)
+            | (self.0[3] as u32)
+    }
 }
 
 impl Display for FourCC {

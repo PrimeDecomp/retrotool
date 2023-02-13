@@ -88,10 +88,11 @@ pub struct StringTable {
 
 /// PACK::TOCC::STRG chunk entry
 #[binrw]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StringTableEntry {
-    #[br(map = FourCC::swap)]
-    #[bw(map = |&f| f.swap())]
+    // Byteswapped
+    #[br(map = FourCC::from_u32)]
+    #[bw(map = FourCC::as_u32)]
     pub kind: FourCC,
     #[br(map = Uuid::from_bytes_le)]
     #[bw(map = Uuid::to_bytes_le)]
@@ -160,25 +161,23 @@ impl Package<'_> {
                 }
                 K_CHUNK_META => {
                     let chunk: MetadataTable = reader.read_type(e)?;
-                    let mut iter = chunk.entries.iter().peekable();
-                    while let Some(entry) = iter.next() {
-                        let size = if let Some(next) = iter.peek() {
-                            (next.offset - entry.offset) as usize
-                        } else {
-                            chunk_data.len() - entry.offset as usize
-                        };
-                        log::debug!("- {:?}", entry);
-                        meta.insert(
-                            entry.asset_id,
-                            &chunk_data[entry.offset as usize..entry.offset as usize + size],
+                    for entry in chunk.entries {
+                        let meta_size = u32::from_le_bytes(
+                            chunk_data[entry.offset as usize..entry.offset as usize + 4]
+                                .try_into()
+                                .unwrap(),
                         );
+                        let meta_data = &chunk_data
+                            [entry.offset as usize + 4..(entry.offset + 4 + meta_size) as usize];
+                        log::debug!("- {:?} (size {:#X})", entry, meta_size);
+                        meta.insert(entry.asset_id, meta_data);
                     }
                 }
                 K_CHUNK_STRG => {
                     let chunk: StringTable = reader.read_type(e)?;
-                    for entry in &chunk.entries {
+                    for entry in chunk.entries {
                         log::debug!("- {:?}", entry);
-                        strg.insert(entry.asset_id, String::from_utf8(entry.name.clone())?);
+                        strg.insert(entry.asset_id, String::from_utf8(entry.name)?);
                     }
                 }
                 kind => bail!("Unhandled TOCC chunk {:?}", kind),
@@ -263,10 +262,14 @@ impl Package<'_> {
                 metadata.entries.push(MetadataTableEntry { asset_id: asset.id, offset: 0 });
             }
             if let Some(name) = &asset.name {
+                // Default::default makes the IDE happy,
+                // just need to suppress clippy
+                #[allow(clippy::needless_update)]
                 string_table.entries.push(StringTableEntry {
                     kind: asset.kind,
                     asset_id: asset.id,
                     name: name.as_bytes().to_vec(),
+                    ..Default::default()
                 });
             }
         }
@@ -299,7 +302,9 @@ impl Package<'_> {
                                     .zip(&mut metadata.entries)
                                 {
                                     entry.offset = (w.stream_position()? - start) as u32;
-                                    w.write_all(asset.meta.as_ref().unwrap())?;
+                                    let data = asset.meta.as_ref().unwrap();
+                                    w.write_type(&(data.len() as u32), e)?;
+                                    w.write_all(data)?;
                                 }
                                 let end = w.stream_position()?;
                                 w.seek(SeekFrom::Start(start))?;
