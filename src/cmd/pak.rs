@@ -80,7 +80,7 @@ fn extract(args: ExtractArgs) -> Result<()> {
             asset.kind,
             name,
             asset.data.len(),
-            asset.data.is_owned(),
+            asset.info.compression_mode != 0,
             asset.meta.as_ref().map(|m| m.len()).unwrap_or_default()
         );
         let file_name = asset

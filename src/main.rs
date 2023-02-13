@@ -1,5 +1,3 @@
-#![feature(cow_is_borrowed)]
-
 mod argh_version;
 mod cmd;
 mod format;
