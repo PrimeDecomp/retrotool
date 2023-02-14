@@ -13,10 +13,10 @@ pub const K_CHUNK_RFRM: FourCC = FourCC(*b"RFRM");
 #[derive(Clone, Debug)]
 pub struct FormDescriptor {
     pub size: u64,
-    pub unk1: u64,
+    pub unk: u64,
     pub id: FourCC,
-    pub version: u32,
-    pub other_version: u32,
+    pub version_a: u32,
+    pub version_b: u32,
 }
 
 impl FormDescriptor {

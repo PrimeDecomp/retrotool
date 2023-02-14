@@ -1,6 +1,7 @@
 pub mod chunk;
 pub mod pack;
 pub mod rfrm;
+pub mod txtr;
 
 use std::fmt::{Debug, Display, Formatter, Write};
 

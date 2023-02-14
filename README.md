@@ -26,6 +26,21 @@ Re-packages a `.pak`, given an extracted directory.
 $ retrotool pak package [in_dir] [out_pak]
 ```
 
+### txtr convert
+
+Converts a `.TXTR` file to `.dds` (recommended) or `.astc`.
+
+Textures are often compressed with BCn or ASTC, which are not commonly supported by image viewers.  
+[tacentview](https://github.com/bluescan/tacentview) is recommended to view and convert the resulting textures.
+
+```shell
+$ retrotool txtr convert [in].TXTR
+# writes to [in].dds
+
+$ retrotool txtr convert --astc [in].TXTR
+# writes to [in].astc
+```
+
 ### fmv0 extract
 
 Extracts the contained video from a given `FMV0` file.

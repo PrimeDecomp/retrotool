@@ -1,3 +1,5 @@
+pub mod astc;
+pub mod dds;
 pub mod file;
 pub mod lzss;
 

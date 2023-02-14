@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     format::{chunk::ChunkDescriptor, rfrm::FormDescriptor, FourCC},
-    util::lzss::decompress,
+    util::lzss::decompress_buffer,
 };
 
 // Package file
@@ -138,11 +138,11 @@ impl Package<'_> {
     pub fn read(data: &[u8], e: Endian) -> Result<Package> {
         let (pack, pack_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(pack.id == K_FORM_PACK);
-        ensure!(pack.version == 1);
+        ensure!(pack.version_a == 1);
         log::debug!("PACK: {:?}", pack);
         let (tocc, mut tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.version == 3);
+        ensure!(tocc.version_a == 3);
         log::debug!("TOCC: {:?}", tocc);
         let mut adir: Option<AssetDirectory> = None;
         let mut meta: HashMap<Uuid, &[u8]> = HashMap::new();
@@ -185,57 +185,42 @@ impl Package<'_> {
             tocc_data = remain;
         }
 
-        let mut package = Package { assets: vec![] };
-        if let Some(adir) = adir {
-            for asset_entry in &adir.entries {
-                let mut compression_mode = 0u32;
-                let data: Cow<[u8]> = if asset_entry.size != asset_entry.decompressed_size {
-                    let compressed_data = &data[asset_entry.offset as usize
-                        ..(asset_entry.offset + asset_entry.size) as usize];
-                    compression_mode =
-                        u32::from_le_bytes(compressed_data[0..4].try_into().unwrap());
-                    let mut out = vec![0u8; asset_entry.decompressed_size as usize];
-                    let lzss_data = &compressed_data[4..];
-                    match compression_mode {
-                        1 => decompress::<1>(lzss_data, &mut out),
-                        2 => decompress::<2>(lzss_data, &mut out),
-                        3 => decompress::<3>(lzss_data, &mut out),
-                        _ => bail!("Unsupported compression mode {}", compression_mode),
-                    }
-                    Cow::Owned(out)
-                } else {
-                    Cow::Borrowed(
-                        &data[asset_entry.offset as usize
-                            ..(asset_entry.offset + asset_entry.size) as usize],
-                    )
-                };
-
-                // Validate RFRM
-                {
-                    let (form, _, _) = FormDescriptor::slice(&data, Endian::Little)?;
-                    ensure!(asset_entry.asset_type == form.id);
-                    ensure!(asset_entry.version == form.version);
-                    ensure!(asset_entry.other_version == form.other_version);
-                    ensure!(asset_entry.decompressed_size == form.size + 32 /* RFRM */);
-                }
-
-                package.assets.push(Asset {
-                    id: asset_entry.asset_id,
-                    kind: asset_entry.asset_type,
-                    name: strg.get(&asset_entry.asset_id).cloned(),
-                    data,
-                    meta: meta.get(&asset_entry.asset_id).map(|data| Cow::Borrowed(*data)),
-                    info: AssetInfo {
-                        id: asset_entry.asset_id,
-                        compression_mode,
-                        orig_offset: asset_entry.offset,
-                    },
-                    version: asset_entry.version,
-                    other_version: asset_entry.other_version,
-                });
-            }
-        } else {
+        let Some(adir) = adir else {
             bail!("Failed to locate asset directory");
+        };
+        let mut package = Package { assets: Vec::with_capacity(adir.entries.len()) };
+        for asset_entry in &adir.entries {
+            let compressed_data = &data
+                [asset_entry.offset as usize..(asset_entry.offset + asset_entry.size) as usize];
+            let (compression_mode, data) = if asset_entry.size != asset_entry.decompressed_size {
+                decompress_buffer(compressed_data, asset_entry.decompressed_size)?
+            } else {
+                (0, Cow::Borrowed(compressed_data))
+            };
+
+            // Validate RFRM
+            {
+                let (form, _, _) = FormDescriptor::slice(&data, Endian::Little)?;
+                ensure!(asset_entry.asset_type == form.id);
+                ensure!(asset_entry.version == form.version_a);
+                ensure!(asset_entry.other_version == form.version_b);
+                ensure!(asset_entry.decompressed_size == form.size + 32 /* RFRM */);
+            }
+
+            package.assets.push(Asset {
+                id: asset_entry.asset_id,
+                kind: asset_entry.asset_type,
+                name: strg.get(&asset_entry.asset_id).cloned(),
+                data,
+                meta: meta.get(&asset_entry.asset_id).map(|data| Cow::Borrowed(*data)),
+                info: AssetInfo {
+                    id: asset_entry.asset_id,
+                    compression_mode,
+                    orig_offset: asset_entry.offset,
+                },
+                version: asset_entry.version,
+                other_version: asset_entry.other_version,
+            });
         }
         Ok(package)
     }
@@ -274,11 +259,11 @@ impl Package<'_> {
             }
         }
         let mut adir_pos = 0;
-        FormDescriptor { size: 0, unk1: 0, id: K_FORM_PACK, version: 1, other_version: 1 }.write(
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_PACK, version_a: 1, version_b: 1 }.write(
             w,
             e,
             |w| {
-                FormDescriptor { size: 0, unk1: 0, id: K_FORM_TOCC, version: 3, other_version: 3 }
+                FormDescriptor { size: 0, unk: 0, id: K_FORM_TOCC, version_a: 3, version_b: 3 }
                     .write(w, e, |w| {
                         ChunkDescriptor { id: K_CHUNK_ADIR, size: 0, unk: 1, skip: 0 }.write(
                             w,

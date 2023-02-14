@@ -11,8 +11,6 @@ pub struct ChunkDescriptor {
     pub id: FourCC,
     pub size: u64,
     pub unk: u32,
-    // game skips this amount of bytes before continuing
-    // but always 0?
     pub skip: u64,
 }
 
@@ -34,8 +32,11 @@ impl ChunkDescriptor {
         Ok((header, slice, remain))
     }
 
-    pub fn write<W: Write + Seek, CB>(&mut self, w: &mut W, e: Endian, mut cb: CB) -> Result<()>
-    where CB: FnMut(&mut W) -> Result<()> {
+    pub fn write<W, CB>(&mut self, w: &mut W, e: Endian, mut cb: CB) -> Result<()>
+    where
+        W: Write + Seek,
+        CB: FnMut(&mut W) -> Result<()>,
+    {
         let form_pos = w.stream_position()?;
         w.write_type(self, e)?;
         let data_pos = w.stream_position()?;
