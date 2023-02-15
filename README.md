@@ -1,7 +1,7 @@
 # retrotool [![Build Status]][actions]
 
-[Build Status]: https://github.com/encounter/retrotool/actions/workflows/build.yml/badge.svg
-[actions]: https://github.com/encounter/retrotool/actions
+[Build Status]: https://github.com/PrimeDecomp/retrotool/actions/workflows/build.yml/badge.svg
+[actions]: https://github.com/PrimeDecomp/retrotool/actions
 
 > **Warning**
 > Under active development, not guaranteed to be useful or even function.
