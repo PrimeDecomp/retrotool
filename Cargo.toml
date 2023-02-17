@@ -23,8 +23,11 @@ binrw = "0.11.1"
 binrw_derive = "0.11.1"
 ddsfile = { git = "https://github.com/encounter/ddsfile", rev = "880f04c1dffa680eab0e9e09cfa58591fe186a31" }
 env_logger = "0.10.0"
+gltf-json = { version = "1.1.0", features = ["names", "extras"] }
+half = "2.2.1"
 # image = "0.24.5"
 log = "0.4.17"
 memmap2 = "0.5.8"
+serde_json = "1.0.93"
 tegra_swizzle = "0.3.0"
 uuid = "1.3.0"
