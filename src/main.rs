@@ -4,13 +4,21 @@ mod format;
 mod util;
 
 use argh::FromArgs;
-use cmd::SubCommand;
 
 #[derive(FromArgs, PartialEq, Debug)]
 /// GameCube/Wii decompilation project tools.
 struct TopLevel {
     #[argh(subcommand)]
     command: SubCommand,
+}
+
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand)]
+pub enum SubCommand {
+    Cmdl(cmd::cmdl::Args),
+    Fmv0(cmd::fmv0::Args),
+    Pak(cmd::pak::Args),
+    Txtr(cmd::txtr::Args),
 }
 
 fn main() {
@@ -22,9 +30,10 @@ fn main() {
 
     let args: TopLevel = argh_version::from_env();
     let result = match args.command {
+        SubCommand::Cmdl(args) => cmd::cmdl::run(args),
+        SubCommand::Fmv0(args) => cmd::fmv0::run(args),
         SubCommand::Pak(args) => cmd::pak::run(args),
         SubCommand::Txtr(args) => cmd::txtr::run(args),
-        SubCommand::Fmv0(args) => cmd::fmv0::run(args),
     };
     if let Err(e) = result {
         eprintln!("Failed: {e:?}");

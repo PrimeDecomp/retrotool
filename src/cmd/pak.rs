@@ -6,6 +6,7 @@ use std::{
     io::{BufWriter, Cursor, Write},
     path::PathBuf,
 };
+use std::fs::DirBuilder;
 
 use anyhow::{bail, ensure, Context, Result};
 use argh::FromArgs;
@@ -89,6 +90,9 @@ fn extract(args: ExtractArgs) -> Result<()> {
             .map(|name| format!("{}.{}", name, asset.kind))
             .unwrap_or_else(|| format!("{}.{}", asset.id, asset.kind));
         let path = args.output.join(&file_name);
+        if let Some(parent) = path.parent() {
+            DirBuilder::new().recursive(true).create(parent)?;
+        }
 
         let mut file = BufWriter::new(
             File::create(&path)
