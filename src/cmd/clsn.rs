@@ -206,7 +206,6 @@ fn convert(args: ConvertArgs) -> Result<()> {
         if desc.id == K_CHUNK_INFO {
             bounds = Some(Cursor::new(data).read_type(Endian::Little)?);
             log::debug!("Bounds: {bounds:#?}");
-            break;
         } else if desc.id == K_CHUNK_VERT {
             vertices = Some(Cursor::new(data).read_type(Endian::Little)?);
             log::debug!("Vertices: {vertices:#?}");
