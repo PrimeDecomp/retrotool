@@ -2,6 +2,7 @@ pub mod astc;
 pub mod dds;
 pub mod file;
 pub mod lzss;
+pub mod math_classes;
 
 /// Creates a fixed-size array reference from a slice.
 #[macro_export]

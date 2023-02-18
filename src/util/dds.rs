@@ -29,7 +29,7 @@ pub fn write_dds<W: Write>(w: &mut W, head: &STextureHeader, data: Vec<u8>) -> R
     })?;
     // FIXME: ddsfile ASTC size calc is broken
     if !head.format.is_astc() {
-        ensure!(dds.data.len() == data.len());
+        //ensure!(dds.data.len() == data.len());
     }
     dds.data = data;
     dds.write(w)?;

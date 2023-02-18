@@ -24,7 +24,13 @@ use crate::{
         rfrm::FormDescriptor,
         FourCC,
     },
-    util::{file::map_file, lzss::decompress_buffer},
+    util::{
+        file::map_file,
+        lzss::decompress_buffer,
+        math_classes::{
+            CVector3f, CAABox,
+        },
+    },
 };
 
 // Cooked model
@@ -331,21 +337,6 @@ pub struct CRenderMesh {
     pub index_count: u32,
     pub unk_c: u16,
     pub unk_e: u16, // 64
-}
-
-#[binrw]
-#[derive(Clone, Debug)]
-pub struct CVector3f {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-}
-
-#[binrw]
-#[derive(Clone, Debug)]
-pub struct CAABox {
-    pub min: CVector3f,
-    pub max: CVector3f,
 }
 
 #[binrw]
@@ -1567,7 +1558,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
                     _ => bail!("Unsupported data type for NRML"),
                 },
                 id => {
-                    // log::debug!("Ignoring material data ID {id:?}");
+                     log::debug!("Ignoring material data ID {id:?}");
                     continue;
                 }
             }
