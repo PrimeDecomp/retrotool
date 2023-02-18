@@ -1,4 +1,4 @@
-use binrw::{binrw, BinReaderExt, BinWriterExt, Endian};
+use binrw::binrw;
 
 #[binrw]
 #[derive(Clone, Debug)]

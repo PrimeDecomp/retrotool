@@ -28,7 +28,7 @@ use crate::{
         file::map_file,
         lzss::decompress_buffer,
         math_classes::{
-            CVector3f, CAABox,
+            CAABox,
         },
     },
 };

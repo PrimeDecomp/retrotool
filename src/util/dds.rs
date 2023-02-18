@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use ddsfile::{AlphaMode, D3D10ResourceDimension, DxgiFormat, NewDxgiParams};
 
 use crate::format::txtr::{ETextureFormat, ETextureType, STextureHeader};

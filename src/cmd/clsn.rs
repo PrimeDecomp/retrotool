@@ -1,34 +1,26 @@
 use std::{
-    borrow::Cow,
-    collections::HashMap,
-    fs::{
-        DirBuilder,
-        File
-    },
-    io::{Cursor, Read, Write},
+    fs::File,
+    io::{Cursor, Write},
     path::PathBuf,
-    string::FromUtf8Error,
 };
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{ensure, Result};
 use argh::FromArgs;
-use binrw::{binrw, BinReaderExt, BinWriterExt, Endian};
+use binrw::{binrw, BinReaderExt, Endian};
 
 use crate::{
     format::{
         chunk::ChunkDescriptor,
-        pack::{K_CHUNK_META, K_FORM_FOOT},
+        pack::K_FORM_FOOT,
         rfrm::FormDescriptor,
         FourCC,
     },
     util::{
         file::map_file,
-        lzss::decompress_buffer,
         math_classes::{
             CVector3f, CAABox, COBBox
         },
     },};
-use crate::cmd::txtr::K_CHUNK_HEAD;
 
 // CAABoxCollisionTree
 pub const K_FORM_CLSN: FourCC = FourCC(*b"CLSN");
@@ -194,34 +186,34 @@ fn convert(args: ConvertArgs) -> Result<()> {
     ensure!(foot_desc.version_b == 1);
     ensure!(remain.is_empty());
 
-    let mut bounds: Option<CAABox> = None;
+    //let mut bounds: Option<CAABox> = None;
     let mut vertices: Option<Vertices> = None;
-    let mut materials: Option<Materials> = None;
+    //let mut materials: Option<Materials> = None;
     let mut triangles: Option<Triangles> = None;
-    let mut aboxtree: Option<AABoxCollisionTree> = None;
-    let mut oboxtree: Option<OBBoxCollisionTree> = None;
+    //let mut aboxtree: Option<AABoxCollisionTree> = None;
+    //let mut oboxtree: Option<OBBoxCollisionTree> = None;
 
     while !col_data.is_empty() {
         let (desc, data, remain) = ChunkDescriptor::slice(col_data, Endian::Little)?;
         if desc.id == K_CHUNK_INFO {
-            bounds = Some(Cursor::new(data).read_type(Endian::Little)?);
-            log::debug!("Bounds: {bounds:#?}");
+            //bounds = Some(Cursor::new(data).read_type(Endian::Little)?);
+            //log::debug!("Bounds: {bounds:#?}");
         } else if desc.id == K_CHUNK_VERT {
             vertices = Some(Cursor::new(data).read_type(Endian::Little)?);
             log::debug!("Vertices: {vertices:#?}");
         } else if desc.id == K_CHUNK_MTRL {
-            materials = Some(Cursor::new(data).read_type(Endian::Little)?);
-            log::debug!("Materials: {materials:#?}");
+            //materials = Some(Cursor::new(data).read_type(Endian::Little)?);
+            //log::debug!("Materials: {materials:#?}");
         } else if desc.id == K_CHUNK_TRIS {
             triangles = Some(Cursor::new(data).read_type(Endian::Little)?);
             log::debug!("Triangles: {triangles:#?}");
         } else if desc.id == K_CHUNK_TREE {
             if form_desc.id == K_FORM_CLSN {
-                aboxtree = Some(Cursor::new(data).read_type(Endian::Little)?);
-                log::debug!("Tree: {aboxtree:#?}");
+                //aboxtree = Some(Cursor::new(data).read_type(Endian::Little)?);
+                //log::debug!("Tree: {aboxtree:#?}");
             } else {
-                oboxtree = Some(Cursor::new(data).read_type(Endian::Little)?);
-                log::debug!("Tree: {oboxtree:#?}");
+                //oboxtree = Some(Cursor::new(data).read_type(Endian::Little)?);
+                //log::debug!("Tree: {oboxtree:#?}");
             }
         }
         col_data = remain;
