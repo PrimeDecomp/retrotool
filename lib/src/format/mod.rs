@@ -1,9 +1,14 @@
 pub mod chunk;
+pub mod cmdl;
+pub mod foot;
 pub mod pack;
 pub mod rfrm;
 pub mod txtr;
 
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::{
+    fmt::{Debug, Display, Formatter, Write},
+    string::FromUtf8Error,
+};
 
 use binrw::binrw;
 
@@ -54,3 +59,60 @@ impl PartialEq<[u8; 4]> for FourCC {
 
 #[inline]
 pub fn peek_four_cc(data: &[u8]) -> FourCC { FourCC(*array_ref!(data, 0, 4)) }
+
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct CVector3f {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct CColor4f {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct CVector4i {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub w: i32,
+}
+
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct CMatrix4f {
+    pub m: [f32; 16],
+}
+
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct CAABox {
+    pub min: CVector3f,
+    pub max: CVector3f,
+}
+
+#[binrw]
+#[derive(Clone, Debug, Default)]
+pub struct CStringFixedName {
+    #[bw(try_calc = text.len().try_into())]
+    pub size: u32,
+    #[br(count = size)]
+    pub text: Vec<u8>,
+}
+
+impl CStringFixedName {
+    fn from_string(str: &String) -> Self {
+        #[allow(clippy::needless_update)]
+        Self { text: str.as_bytes().to_vec(), ..Default::default() }
+    }
+
+    fn into_string(self) -> Result<String, FromUtf8Error> { String::from_utf8(self.text) }
+}

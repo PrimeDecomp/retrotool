@@ -2,20 +2,19 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     fs,
-    fs::File,
+    fs::{DirBuilder, File},
     io::{BufWriter, Cursor, Write},
     path::PathBuf,
 };
-use std::fs::DirBuilder;
 
 use anyhow::{bail, ensure, Context, Result};
 use argh::FromArgs;
 use binrw::{BinReaderExt, BinWriterExt, Endian};
-
-use crate::{
+use retrolib::{
     format::{
         chunk::ChunkDescriptor,
-        pack::{Asset, AssetInfo, Package, K_CHUNK_AINF, K_CHUNK_META, K_CHUNK_NAME, K_FORM_FOOT},
+        foot::{K_CHUNK_AINF, K_CHUNK_NAME, K_FORM_FOOT},
+        pack::{Asset, AssetInfo, Package, K_CHUNK_META},
         rfrm::FormDescriptor,
     },
     util::file::map_file,
@@ -69,7 +68,7 @@ pub fn run(args: Args) -> Result<()> {
 
 fn extract(args: ExtractArgs) -> Result<()> {
     let data = map_file(args.input)?;
-    let package = Package::read(&data, Endian::Little)?;
+    let package = Package::read_full(&data, Endian::Little)?;
     for asset in &package.assets {
         let name = asset
             .name

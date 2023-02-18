@@ -1,8 +1,20 @@
-use std::num::NonZeroUsize;
+use std::{io::Cursor, num::NonZeroUsize};
 
-use anyhow::{ensure, Result};
-use binrw::binrw;
+use anyhow::{anyhow, ensure, Result};
+use binrw::{binrw, BinReaderExt, Endian};
 use tegra_swizzle::surface::BlockDim;
+
+use crate::{
+    format::{chunk::ChunkDescriptor, rfrm::FormDescriptor, FourCC},
+    util::compression::decompress_into,
+};
+
+// Texture
+pub const K_FORM_TXTR: FourCC = FourCC(*b"TXTR");
+// Texture header
+pub const K_CHUNK_HEAD: FourCC = FourCC(*b"HEAD");
+// GPU data
+pub const K_CHUNK_GPU: FourCC = FourCC(*b"GPU ");
 
 #[binrw]
 #[repr(u32)]
@@ -370,7 +382,7 @@ impl ETextureFormat {
     }
 }
 
-pub fn deswizzle(header: &STextureHeader, data: &[u8]) -> Result<Vec<u8>> {
+fn deswizzle(header: &STextureHeader, data: &[u8]) -> Result<Vec<u8>> {
     let (bw, bh, bd) = header.format.block_size();
     let block_dim = BlockDim {
         width: NonZeroUsize::new(bw as usize).unwrap(),
@@ -400,4 +412,44 @@ pub fn deswizzle(header: &STextureHeader, data: &[u8]) -> Result<Vec<u8>> {
         header.mip_sizes.len(),
         header.layers as usize,
     )?)
+}
+
+#[derive(Debug, Clone)]
+pub struct TextureData {
+    pub head: STextureHeader,
+    pub data: Vec<u8>,
+}
+
+impl TextureData {
+    pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<TextureData> {
+        let (txtr_desc, txtr_data, _) = FormDescriptor::slice(data, e)?;
+        ensure!(txtr_desc.id == K_FORM_TXTR);
+        ensure!(txtr_desc.version_a == 47);
+        ensure!(txtr_desc.version_b == 51);
+
+        let (head_desc, head_data, _) = ChunkDescriptor::slice(txtr_data, Endian::Little)?;
+        ensure!(head_desc.id == K_CHUNK_HEAD);
+        let head: STextureHeader = Cursor::new(head_data).read_type(Endian::Little)?;
+
+        // log::debug!("META: {meta:#?}");
+        // log::debug!("HEAD: {head:#?}");
+
+        let meta: STextureMetaData = Cursor::new(meta).read_type(e)?;
+        let mut buffer = vec![0u8; meta.decompressed_size as usize];
+        for info in &meta.buffers {
+            let read =
+                meta.info.iter().find(|i| i.index as u32 == info.index).ok_or_else(|| {
+                    anyhow!("Failed to locate read info for buffer {}", info.index)
+                })?;
+            let read_buf = &data[read.offset as usize..(read.offset + read.size) as usize];
+            let comp_buf = &read_buf[info.offset as usize..(info.offset + info.size) as usize];
+            decompress_into(
+                comp_buf,
+                &mut buffer
+                    [info.dest_offset as usize..(info.dest_offset + info.dest_size) as usize],
+            )?;
+        }
+        let deswizzled = deswizzle(&head, &buffer)?;
+        Ok(TextureData { head, data: deswizzled })
+    }
 }

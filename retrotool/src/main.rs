@@ -1,7 +1,5 @@
 mod argh_version;
 mod cmd;
-mod format;
-mod util;
 
 use argh::FromArgs;
 

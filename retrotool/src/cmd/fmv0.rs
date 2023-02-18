@@ -8,9 +8,8 @@ use std::{
 use anyhow::{ensure, Context, Result};
 use argh::FromArgs;
 use binrw::Endian;
-
-use crate::{
-    format::{pack::K_FORM_FOOT, rfrm::FormDescriptor, FourCC},
+use retrolib::{
+    format::{foot::K_FORM_FOOT, rfrm::FormDescriptor, FourCC},
     util::file::map_file,
 };
 

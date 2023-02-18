@@ -4,13 +4,18 @@ use std::{
     io::{Cursor, Seek, SeekFrom, Write},
 };
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use binrw::{binrw, BinReaderExt, BinWriterExt, Endian};
 use uuid::Uuid;
 
 use crate::{
-    format::{chunk::ChunkDescriptor, rfrm::FormDescriptor, FourCC},
-    util::lzss::decompress_buffer,
+    format::{
+        chunk::ChunkDescriptor,
+        foot::{K_CHUNK_AINF, K_CHUNK_NAME, K_FORM_FOOT},
+        rfrm::FormDescriptor,
+        FourCC,
+    },
+    util::compression::decompress_buffer,
 };
 
 // Package file
@@ -23,13 +28,6 @@ pub const K_CHUNK_META: FourCC = FourCC(*b"META");
 pub const K_CHUNK_STRG: FourCC = FourCC(*b"STRG");
 // Asset directory
 pub const K_CHUNK_ADIR: FourCC = FourCC(*b"ADIR");
-
-// Custom footer for extracted files
-pub const K_FORM_FOOT: FourCC = FourCC(*b"FOOT");
-// Custom footer asset information
-pub const K_CHUNK_AINF: FourCC = FourCC(*b"AINF");
-// Custom footer asset name
-pub const K_CHUNK_NAME: FourCC = FourCC(*b"NAME");
 
 /// PACK::TOCC::ADIR chunk
 #[binrw]
@@ -134,8 +132,201 @@ pub struct Package<'a> {
     pub assets: Vec<Asset<'a>>,
 }
 
+/// Asset header information
+#[derive(Debug, Clone)]
+pub struct SparsePackageEntry {
+    pub id: Uuid,
+    pub kind: FourCC,
+    pub name: Option<String>,
+    pub reader_version: u32,
+    pub writer_version: u32,
+}
+
 impl Package<'_> {
-    pub fn read(data: &[u8], e: Endian) -> Result<Package> {
+    pub fn read_header(data: &[u8], e: Endian) -> Result<Vec<u8>> {
+        let (mut pack, pack_data, _) = FormDescriptor::slice(data, e)?;
+        ensure!(pack.id == K_FORM_PACK);
+        ensure!(pack.version_a == 1);
+        let (mut tocc, tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
+        ensure!(tocc.id == K_FORM_TOCC);
+        ensure!(tocc.version_a == 3);
+
+        // Rewrite PACK with only TOCC chunk
+        let mut out = Cursor::new(Vec::new());
+        pack.write(&mut out, e, |w| {
+            tocc.write(w, e, |w| {
+                w.write_all(tocc_data)?;
+                Ok(())
+            })
+        })?;
+        Ok(out.into_inner())
+    }
+
+    pub fn read_sparse(data: &[u8], e: Endian) -> Result<Vec<SparsePackageEntry>> {
+        let (pack, pack_data, _) = FormDescriptor::slice(data, e)?;
+        ensure!(pack.id == K_FORM_PACK);
+        ensure!(pack.version_a == 1);
+        let (tocc, mut tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
+        ensure!(tocc.id == K_FORM_TOCC);
+        ensure!(tocc.version_a == 3);
+        let mut adir: Option<AssetDirectory> = None;
+        let mut strg: HashMap<Uuid, String> = HashMap::new();
+        while !tocc_data.is_empty() {
+            let (desc, chunk_data, remain) = ChunkDescriptor::slice(tocc_data, e)?;
+            let mut reader = Cursor::new(chunk_data);
+            match desc.id {
+                K_CHUNK_ADIR => {
+                    adir = Some(reader.read_type(e)?);
+                }
+                K_CHUNK_META => {}
+                K_CHUNK_STRG => {
+                    let chunk: StringTable = reader.read_type(e)?;
+                    for entry in chunk.entries {
+                        strg.insert(entry.asset_id, String::from_utf8(entry.name)?);
+                    }
+                }
+                kind => bail!("Unhandled TOCC chunk {:?}", kind),
+            }
+            tocc_data = remain;
+        }
+
+        let Some(adir) = adir else {
+            bail!("Failed to locate asset directory");
+        };
+        let entries = adir
+            .entries
+            .into_iter()
+            .map(|asset_entry| SparsePackageEntry {
+                id: asset_entry.asset_id,
+                kind: asset_entry.asset_type,
+                name: strg.get(&asset_entry.asset_id).cloned(),
+                reader_version: asset_entry.version,
+                writer_version: asset_entry.other_version,
+            })
+            .collect();
+        Ok(entries)
+    }
+
+    pub fn read_asset(data: &[u8], id: Uuid, e: Endian) -> Result<Vec<u8>> {
+        let (pack, pack_data, _) = FormDescriptor::slice(data, e)?;
+        ensure!(pack.id == K_FORM_PACK);
+        ensure!(pack.version_a == 1);
+        let (tocc, mut tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
+        ensure!(tocc.id == K_FORM_TOCC);
+        ensure!(tocc.version_a == 3);
+
+        let mut asset: Option<AssetDirectoryEntry> = None;
+        let mut meta: Option<&[u8]> = None;
+        let mut name: Option<String> = None;
+        while !tocc_data.is_empty() {
+            let (desc, chunk_data, remain) = ChunkDescriptor::slice(tocc_data, e)?;
+            let mut reader = Cursor::new(chunk_data);
+            match desc.id {
+                K_CHUNK_ADIR => {
+                    let adir: AssetDirectory = reader.read_type(e)?;
+                    asset = Some(
+                        adir.entries
+                            .into_iter()
+                            .find(|asset| asset.asset_id == id)
+                            .ok_or_else(|| anyhow!("Failed to locate asset {}", id))?,
+                    );
+                }
+                K_CHUNK_META => {
+                    let chunk: MetadataTable = reader.read_type(e)?;
+                    for entry in chunk.entries {
+                        if entry.asset_id != id {
+                            continue;
+                        }
+                        let meta_size = u32::from_le_bytes(
+                            chunk_data[entry.offset as usize..entry.offset as usize + 4]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let meta_data = &chunk_data
+                            [entry.offset as usize + 4..(entry.offset + 4 + meta_size) as usize];
+                        meta = Some(meta_data);
+                    }
+                }
+                K_CHUNK_STRG => {
+                    let chunk: StringTable = reader.read_type(e)?;
+                    for entry in chunk.entries {
+                        if entry.asset_id != id {
+                            continue;
+                        }
+                        name = Some(String::from_utf8(entry.name)?);
+                        break;
+                    }
+                }
+                kind => bail!("Unhandled TOCC chunk {:?}", kind),
+            }
+            tocc_data = remain;
+        }
+
+        let Some(asset) = asset else {
+            bail!("Failed to locate asset directory");
+        };
+        let compressed_data = &data[asset.offset as usize..(asset.offset + asset.size) as usize];
+        let (compression_mode, data) = if asset.size != asset.decompressed_size {
+            decompress_buffer(compressed_data, asset.decompressed_size)?
+        } else {
+            (0, Cow::Borrowed(compressed_data))
+        };
+
+        // Validate RFRM
+        {
+            let (form, _, _) = FormDescriptor::slice(&data, Endian::Little)?;
+            ensure!(asset.asset_type == form.id);
+            ensure!(asset.version == form.version_a);
+            ensure!(asset.other_version == form.version_b);
+            ensure!(asset.decompressed_size == form.size + 32 /* RFRM */);
+        }
+
+        let len = data.len() as u64;
+        let mut w = Cursor::new(data.into_owned());
+        w.set_position(len); // set to append
+
+        // Write custom footer
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, version_a: 1, version_b: 1 }.write(
+            &mut w,
+            Endian::Little,
+            |w| {
+                ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(
+                    w,
+                    Endian::Little,
+                    |w| {
+                        w.write_le(&AssetInfo { id, compression_mode, orig_offset: asset.offset })?;
+                        Ok(())
+                    },
+                )?;
+                if let Some(meta) = meta {
+                    let meta_chunk = ChunkDescriptor {
+                        id: K_CHUNK_META,
+                        size: meta.len() as u64,
+                        unk: 0,
+                        skip: 0,
+                    };
+                    w.write_le(&meta_chunk)?;
+                    w.write_all(meta)?;
+                }
+                if let Some(name) = &name {
+                    let bytes = name.as_bytes();
+                    let name_chunk = ChunkDescriptor {
+                        id: K_CHUNK_NAME,
+                        size: bytes.len() as u64,
+                        unk: 0,
+                        skip: 0,
+                    };
+                    w.write_le(&name_chunk)?;
+                    w.write_all(bytes)?;
+                }
+                Ok(())
+            },
+        )?;
+
+        Ok(w.into_inner())
+    }
+
+    pub fn read_full(data: &[u8], e: Endian) -> Result<Package> {
         let (pack, pack_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(pack.id == K_FORM_PACK);
         ensure!(pack.version_a == 1);
