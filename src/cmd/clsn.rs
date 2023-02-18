@@ -174,6 +174,8 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn convert(args: ConvertArgs) -> Result<()> {
+    ensure!(args.input != args.out);
+
     // TODO: Migrate to real model format (glTF?)
     let data = map_file(&args.input)?;
     let (form_desc, mut col_data, remain) = FormDescriptor::slice(&data, Endian::Little)?;
