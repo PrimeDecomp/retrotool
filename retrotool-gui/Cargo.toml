@@ -17,7 +17,7 @@ dynamic = ["bevy/dynamic"]
 anyhow = "1.0.69"
 astc-decode = "0.3.1"
 bevy = "0.9.1"
-bevy_egui = { git = "https://github.com/paul-hansen/bevy_egui", branch = "egui-0.21" }
+bevy_egui = { git = "https://github.com/mvlabat/bevy_egui", rev = "65f37508339e3a1abe54ae901dad7f49e820cd41" }
 binrw = "0.11.1"
 egui = "0.21.0"
 egui_dock = "0.4.0"
