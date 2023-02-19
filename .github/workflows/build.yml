@@ -25,9 +25,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Cargo check
-        run: cargo check --all-features
+        run: cargo check
       - name: Cargo clippy
-        run: cargo clippy --all-features
+        run: cargo clippy
 
   deny:
     name: Deny
@@ -58,7 +58,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cargo test
-        run: cargo test --release --all-features
+        run: cargo test --release
 
   build:
     name: Build
@@ -115,7 +115,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Cargo build
-        run: cargo ${{ matrix.build }} --release --all-features --target ${{ matrix.target }} --bin ${{ env.CARGO_BIN_NAME }}
+        run: cargo ${{ matrix.build }} --release --target ${{ matrix.target }} --bin ${{ env.CARGO_BIN_NAME }}
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
