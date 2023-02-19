@@ -19,7 +19,7 @@ pub const K_CHUNK_GPU: FourCC = FourCC(*b"GPU ");
 #[binrw]
 #[repr(u32)]
 #[brw(repr(u32))]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureType {
     _1D = 0,
     _2D = 1,
@@ -35,7 +35,7 @@ pub enum ETextureType {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureWrap {
     ClampToEdge = 0,
     Repeat = 1,
@@ -48,7 +48,7 @@ pub enum ETextureWrap {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureFilter {
     Nearest = 0,
     Linear = 1,
@@ -57,7 +57,7 @@ pub enum ETextureFilter {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureMipFilter {
     Nearest = 0,
     Linear = 1,
@@ -66,7 +66,7 @@ pub enum ETextureMipFilter {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureAnisotropicRatio {
     None = u8::MAX,
     _1 = 0,
@@ -145,7 +145,7 @@ pub struct STextureMetaData {
 #[binrw]
 #[repr(u32)]
 #[brw(repr(u32))]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureFormat {
     R8Unorm = 0,
     R8Snorm = 1,
@@ -300,6 +300,31 @@ impl ETextureFormat {
                 | ETextureFormat::RgbaAstc10x10Srgb
                 | ETextureFormat::RgbaAstc12x10Srgb
                 | ETextureFormat::RgbaAstc12x12Srgb
+        )
+    }
+
+    pub fn is_srgb(self) -> bool {
+        matches!(
+            self,
+            ETextureFormat::Rgba8Srgb
+                | ETextureFormat::RgbaBc1Srgb
+                | ETextureFormat::RgbaBc2Srgb
+                | ETextureFormat::RgbaBc3Srgb
+                | ETextureFormat::RgbaAstc4x4Srgb
+                | ETextureFormat::RgbaAstc5x4Srgb
+                | ETextureFormat::RgbaAstc5x5Srgb
+                | ETextureFormat::RgbaAstc6x5Srgb
+                | ETextureFormat::RgbaAstc6x6Srgb
+                | ETextureFormat::RgbaAstc8x5Srgb
+                | ETextureFormat::RgbaAstc8x6Srgb
+                | ETextureFormat::RgbaAstc8x8Srgb
+                | ETextureFormat::RgbaAstc10x5Srgb
+                | ETextureFormat::RgbaAstc10x6Srgb
+                | ETextureFormat::RgbaAstc10x8Srgb
+                | ETextureFormat::RgbaAstc10x10Srgb
+                | ETextureFormat::RgbaAstc12x10Srgb
+                | ETextureFormat::RgbaAstc12x12Srgb
+                | ETextureFormat::BptcUnormSrgb
         )
     }
 

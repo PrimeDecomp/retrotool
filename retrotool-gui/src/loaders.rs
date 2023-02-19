@@ -15,7 +15,7 @@ use bevy::{
     prelude::*,
 };
 use binrw::Endian;
-use image::{ImageBuffer, RgbaImage};
+use image::{ RgbaImage};
 use retrolib::{
     format::{
         foot::locate_meta,
@@ -54,7 +54,7 @@ impl AssetIo for RetroAssetIo {
         if let Some(id) =
             path.file_stem().and_then(|name| Uuid::try_parse(&name.to_string_lossy()).ok())
         {
-            // Load pak header only
+            // Find pak for UUID and load asset
             Box::pin(async move {
                 let mut package_path: Option<PathBuf> = None;
                 if let Ok(packages) = self.packages.packages.read() {
@@ -182,20 +182,20 @@ impl AssetLoader for PackageAssetLoader {
 
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "83269869-1209-408e-8835-bc6f2496e828"]
-pub struct TxtrData {
-    pub data: TextureData,
+pub struct TextureAsset {
+    pub inner: TextureData,
     pub rgba: Option<Vec<u8>>,
 }
 
-pub struct TxtrAssetLoader;
+pub struct TextureAssetLoader;
 
-impl Plugin for TxtrAssetLoader {
+impl Plugin for TextureAssetLoader {
     fn build(&self, app: &mut App) {
-        app.add_asset::<TxtrData>().add_asset_loader(TxtrAssetLoader);
+        app.add_asset::<TextureAsset>().add_asset_loader(TextureAssetLoader);
     }
 }
 
-impl AssetLoader for TxtrAssetLoader {
+impl AssetLoader for TextureAssetLoader {
     fn load<'a>(
         &'a self,
         bytes: &'a [u8],
@@ -220,7 +220,7 @@ impl AssetLoader for TxtrAssetLoader {
                 rgba = Some(image.into_raw());
             }
             println!("Loaded texture {:?}", data.head);
-            load_context.set_default_asset(LoadedAsset::new(TxtrData { data, rgba }));
+            load_context.set_default_asset(LoadedAsset::new(TextureAsset { inner: data, rgba }));
             Ok(())
         })
     }

@@ -774,7 +774,7 @@ pub struct ModelData<'a> {
 
 impl ModelData<'_> {
     pub fn slice<'a>(data: &'a [u8], meta: &[u8], e: Endian) -> Result<ModelData<'a>> {
-        let (cmdl_desc, mut cmdl_data, _) = FormDescriptor::slice(&data, Endian::Little)?;
+        let (cmdl_desc, mut cmdl_data, _) = FormDescriptor::slice(data, Endian::Little)?;
         ensure!(cmdl_desc.id == K_FORM_CMDL);
         ensure!(cmdl_desc.version_a == 114);
         ensure!(cmdl_desc.version_b == 125);
