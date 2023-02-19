@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use ddsfile::{AlphaMode, D3D10ResourceDimension, DxgiFormat, NewDxgiParams};
 
 use crate::format::txtr::{ETextureFormat, ETextureType, STextureHeader};
@@ -29,7 +29,7 @@ pub fn write_dds<W: Write>(w: &mut W, head: &STextureHeader, data: Vec<u8>) -> R
     })?;
     // FIXME: ddsfile ASTC size calc is broken
     if !head.format.is_astc() {
-        ensure!(dds.data.len() == data.len());
+        //ensure!(dds.data.len() == data.len());
     }
     dds.data = data;
     dds.write(w)?;

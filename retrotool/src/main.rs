@@ -13,6 +13,7 @@ struct TopLevel {
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand)]
 pub enum SubCommand {
+    Clsn(cmd::clsn::Args),
     Cmdl(cmd::cmdl::Args),
     Fmv0(cmd::fmv0::Args),
     Pak(cmd::pak::Args),
@@ -28,6 +29,7 @@ fn main() {
 
     let args: TopLevel = argh_version::from_env();
     let result = match args.command {
+        SubCommand::Clsn(args) => cmd::clsn::run(args),
         SubCommand::Cmdl(args) => cmd::cmdl::run(args),
         SubCommand::Fmv0(args) => cmd::fmv0::run(args),
         SubCommand::Pak(args) => cmd::pak::run(args),
