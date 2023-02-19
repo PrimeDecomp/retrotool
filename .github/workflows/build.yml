@@ -10,27 +10,21 @@ on:
 env:
   CARGO_BIN_NAME: retrotool retrotool-gui
   CARGO_TARGET_DIR: target
+  UBUNTU_PACKAGES: libx11-dev libasound2-dev libudev-dev
 
 jobs:
   check:
     name: Check
+    runs-on: ubuntu-latest
     env:
       RUSTFLAGS: -D warnings
-    strategy:
-      matrix:
-        include:
-          - platform: ubuntu-latest
-            packages: libasound2-dev
-      fail-fast: false
-    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Install dependencies
-        if: matrix.packages != ''
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install ${{ matrix.packages }}
+          sudo apt-get -y install $UBUNTU_PACKAGES
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -61,21 +55,16 @@ jobs:
     name: Test
     strategy:
       matrix:
-        include:
-          - platform: ubuntu-latest
-            packages: libasound2-dev
-          - platform: windows-latest
-          - platform: macos-latest
+        platform: [ubuntu-latest, windows-latest, macos-latest]
       fail-fast: false
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Install dependencies
-        if: matrix.packages != ''
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install ${{ matrix.packages }}
+          sudo apt-get -y install $UBUNTU_PACKAGES
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cargo test
@@ -125,11 +114,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: Install dependencies
-        if: matrix.packages != ''
-        run: |
-          sudo apt-get -y update
-          sudo apt-get -y install ${{ matrix.packages }}
       - name: Install cargo-zigbuild
         if: matrix.build == 'zigbuild'
         run: pip install cargo-zigbuild
@@ -161,7 +145,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
             build: build
-            packages: libasound2-dev
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
@@ -184,10 +167,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Install dependencies
-        if: matrix.packages != ''
+        if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install ${{ matrix.packages }}
+          sudo apt-get -y install $UBUNTU_PACKAGES
       - name: Install cargo-zigbuild
         if: matrix.build == 'zigbuild'
         run: pip install cargo-zigbuild
