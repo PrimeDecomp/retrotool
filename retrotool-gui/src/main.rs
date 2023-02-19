@@ -1,5 +1,7 @@
 mod loaders;
 
+use std::path::PathBuf;
+
 use bevy::{
     asset::LoadState,
     ecs::system::{
@@ -29,11 +31,14 @@ use crate::loaders::{
     TextureAssetLoader,
 };
 
-/// This example demonstrates the following functionality and use-cases of bevy_egui:
-/// - rendering loaded assets;
-/// - toggling hidpi scaling (by pressing '/' button);
-/// - configuring egui contexts during the startup.
+#[derive(Default, Resource)]
+struct FileOpen(Vec<PathBuf>);
+
 fn main() {
+    let mut file_open = FileOpen::default();
+    for arg in std::env::args_os() {
+        file_open.0.push(arg.into());
+    }
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
         .insert_resource(Msaa { samples: 1 })
@@ -41,13 +46,15 @@ fn main() {
             features: bevy::render::settings::WgpuFeatures::TEXTURE_COMPRESSION_BC,
             ..Default::default()
         })
+        .insert_resource(file_open)
         .init_resource::<UiState>()
         .init_resource::<Packages>()
         .add_plugins(DefaultPlugins.build().add_before::<AssetPlugin, _>(RetroAssetIoPlugin))
         .add_plugin(PackageAssetLoader)
         .add_plugin(TextureAssetLoader)
         .add_plugin(EguiPlugin)
-        .add_startup_system(load_packages)
+        .add_system(file_drop)
+        .add_system(load_files)
         .add_system(package_loader_system)
         .add_system(ui_system)
         .run();
@@ -433,11 +440,32 @@ fn is_hidden(entry: &DirEntry) -> bool {
     entry.file_name().to_str().map(|s| s.starts_with('.')).unwrap_or(false)
 }
 
-fn load_packages(server: Res<AssetServer>, mut loading: ResMut<Packages>) {
-    let walker = WalkDir::new("/home/lstreet/Development/mpr/extract/romfs").into_iter();
-    for entry in walker.filter_entry(|e| !is_hidden(e)).filter_map(|e| e.ok()) {
-        if entry.file_type().is_file() && entry.path().extension() == Some("pak".as_ref()) {
-            loading.0.push(server.load(entry.path()));
+fn file_drop(mut dnd_evr: EventReader<FileDragAndDrop>, mut file_open: ResMut<FileOpen>) {
+    for ev in dnd_evr.iter() {
+        if let FileDragAndDrop::DroppedFile { id: _, path_buf } = ev {
+            file_open.0.push(path_buf.clone());
+        }
+    }
+}
+
+fn load_files(
+    server: Res<AssetServer>,
+    mut loading: ResMut<Packages>,
+    mut file_open: ResMut<FileOpen>,
+) {
+    if file_open.0.is_empty() {
+        return;
+    }
+    for path_buf in std::mem::take(&mut file_open.0) {
+        if path_buf.is_dir() {
+            let walker = WalkDir::new(path_buf).into_iter();
+            for entry in walker.filter_entry(|e| !is_hidden(e)).filter_map(|e| e.ok()) {
+                if entry.file_type().is_file() && entry.path().extension() == Some("pak".as_ref()) {
+                    loading.0.push(server.load(entry.path()));
+                }
+            }
+        } else {
+            loading.0.push(server.load(path_buf));
         }
     }
 }
