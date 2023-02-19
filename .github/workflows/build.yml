@@ -132,7 +132,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ matrix.name }}
+          name: ${{ env.CARGO_BIN_NAME }}-${{ matrix.name }}
           path: |
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/${{ env.CARGO_BIN_NAME }}
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/${{ env.CARGO_BIN_NAME }}.exe
@@ -190,7 +190,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ matrix.name }}
+          name: ${{ env.CARGO_BIN_NAME }}-${{ matrix.name }}
           path: |
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/${{ env.CARGO_BIN_NAME }}
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/${{ env.CARGO_BIN_NAME }}.exe
@@ -213,7 +213,7 @@ jobs:
           for bin in $CARGO_BIN_NAME; do
             for i in */*/release/$bin{,.exe}; do
               if [ -f "$i" ]; do
-                mv "$i" "../out/$(sed -E "s/(gui|cli)-([^/]+)\/[^/]+\/release\/($bin)/\3-\2/" <<< "$i")"
+                mv "$i" "../out/$(sed -E "s/([^/]+)\/[^/]+\/release\/$bin/\1/" <<< "$i")"
               fi
             done
           done
