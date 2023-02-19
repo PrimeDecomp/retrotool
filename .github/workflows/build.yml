@@ -10,7 +10,6 @@ on:
 env:
   CARGO_BIN_NAME: retrotool retrotool-gui
   CARGO_TARGET_DIR: target
-  UBUNTU_PACKAGES: libasound2-dev
 
 jobs:
   check:
@@ -21,7 +20,7 @@ jobs:
       matrix:
         include:
           - platform: ubuntu-latest
-            packages: ${{ env.UBUNTU_PACKAGES }}
+            packages: libasound2-dev
       fail-fast: false
     runs-on: ${{ matrix.platform }}
     steps:
@@ -64,7 +63,7 @@ jobs:
       matrix:
         include:
           - platform: ubuntu-latest
-            packages: ${{ env.UBUNTU_PACKAGES }}
+            packages: libasound2-dev
           - platform: windows-latest
           - platform: macos-latest
       fail-fast: false
@@ -162,7 +161,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
             build: build
-            packages: ${{ env.UBUNTU_PACKAGES }}
+            packages: libasound2-dev
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
