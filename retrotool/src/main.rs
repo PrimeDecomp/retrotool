@@ -4,7 +4,7 @@ mod cmd;
 use argh::FromArgs;
 
 #[derive(FromArgs, PartialEq, Debug)]
-/// GameCube/Wii decompilation project tools.
+/// Tools for working with Retro game formats.
 struct TopLevel {
     #[argh(subcommand)]
     command: SubCommand,

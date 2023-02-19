@@ -15,7 +15,7 @@ use bevy::{
     prelude::*,
 };
 use binrw::Endian;
-use image::{ RgbaImage};
+use image::RgbaImage;
 use retrolib::{
     format::{
         foot::locate_meta,

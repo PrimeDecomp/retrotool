@@ -37,6 +37,7 @@ jobs:
         checks:
           - advisories
           - bans licenses sources
+      fail-fast: false
     # Prevent new advisories from failing CI
     continue-on-error: ${{ matrix.checks == 'advisories' }}
     steps:
