@@ -1,6 +1,7 @@
 pub mod chunk;
 pub mod cmdl;
 pub mod foot;
+pub mod mtrl;
 pub mod pack;
 pub mod rfrm;
 pub mod txtr;

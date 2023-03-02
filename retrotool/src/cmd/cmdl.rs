@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
     fs,
     fs::DirBuilder,
@@ -175,7 +174,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
             continue;
         }
 
-        let mut reader = Cursor::new(buf.as_ref());
+        let mut reader = Cursor::new(&*buf);
         let mut new_buf: Vec<u8> =
             Vec::with_capacity(info.vertex_count as usize * info.out_stride as usize);
         let mut tmp_buf = vec![0u8; 16]; // max size of attribute
@@ -209,7 +208,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
                 }
             }
         }
-        *buf = Cow::Owned(new_buf);
+        *buf = new_buf;
     }
 
     DirBuilder::new().recursive(true).create(&args.out_dir)?;

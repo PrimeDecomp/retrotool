@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io::Cursor};
+use std::io::Cursor;
 
 use anyhow::{bail, ensure, Result};
 use binrw::{binrw, BinReaderExt, Endian};
@@ -745,11 +745,11 @@ pub enum EMaterialFlag {
     MFC4 = 26,
 }
 
-fn decompress_gpu_buffers<'a>(
-    file_data: &'a [u8],
+fn decompress_gpu_buffers(
+    file_data: &[u8],
     read_info: &[SModelReadBufferInfo],
     buffer_info: &[SModelBufferInfo],
-) -> Result<Vec<Cow<'a, [u8]>>> {
+) -> Result<Vec<Vec<u8>>> {
     let mut out = Vec::with_capacity(buffer_info.len());
     for info in buffer_info {
         let read_info = &read_info[info.read_index as usize];
@@ -757,23 +757,24 @@ fn decompress_gpu_buffers<'a>(
             &file_data[read_info.offset as usize..(read_info.offset + read_info.size) as usize];
         let comp_buf = &read_buffer[info.offset as usize..(info.offset + info.size) as usize];
         let (_, buf) = decompress_buffer(comp_buf, info.dest_size as u64)?;
-        out.push(buf);
+        out.push(buf.into_owned());
     }
     Ok(out)
 }
 
-pub struct ModelData<'a> {
+#[derive(Debug, Clone)]
+pub struct ModelData {
     pub head: SModelHeader,
     pub mtrl: SMaterialChunk,
     pub mesh: SMeshLoadInformation,
     pub vbuf: SVertexBufferInfoSection,
     pub ibuf: SIndexBufferInfoSection,
-    pub vtx_buffers: Vec<Cow<'a, [u8]>>,
-    pub idx_buffers: Vec<Cow<'a, [u8]>>,
+    pub vtx_buffers: Vec<Vec<u8>>,
+    pub idx_buffers: Vec<Vec<u8>>,
 }
 
-impl ModelData<'_> {
-    pub fn slice<'a>(data: &'a [u8], meta: &[u8], e: Endian) -> Result<ModelData<'a>> {
+impl ModelData {
+    pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<ModelData> {
         let (cmdl_desc, mut cmdl_data, _) = FormDescriptor::slice(data, Endian::Little)?;
         ensure!(cmdl_desc.id == K_FORM_CMDL);
         ensure!(cmdl_desc.version_a == 114);

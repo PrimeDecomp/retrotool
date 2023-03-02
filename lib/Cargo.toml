@@ -14,6 +14,7 @@ anyhow = "1.0.69"
 binrw = "0.11.1"
 binrw_derive = "0.11.1"
 ddsfile = { git = "https://github.com/encounter/ddsfile", rev = "880f04c1dffa680eab0e9e09cfa58591fe186a31" }
+flate2 = "1.0.25"
 log = "0.4.17"
 memmap2 = "0.5.9"
 tegra_swizzle = "0.3.0"
