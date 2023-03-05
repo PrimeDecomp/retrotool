@@ -28,8 +28,8 @@ impl MaterialData {
     pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<MaterialData> {
         let (mtrl_desc, _, _) = FormDescriptor::slice(data, Endian::Little)?;
         ensure!(mtrl_desc.id == K_FORM_MTRL);
-        ensure!(mtrl_desc.version_a == 168);
-        ensure!(mtrl_desc.version_b == 168);
+        ensure!(mtrl_desc.reader_version == 168);
+        ensure!(mtrl_desc.writer_version == 168);
 
         let meta: SMaterialMetaData = Cursor::new(meta).read_type(e)?;
         let mut reader = ZlibDecoder::new(

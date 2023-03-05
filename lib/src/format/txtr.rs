@@ -449,8 +449,8 @@ impl TextureData {
     pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<TextureData> {
         let (txtr_desc, txtr_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(txtr_desc.id == K_FORM_TXTR);
-        ensure!(txtr_desc.version_a == 47);
-        ensure!(txtr_desc.version_b == 51);
+        ensure!(txtr_desc.reader_version == 47);
+        ensure!(txtr_desc.writer_version == 51);
 
         let (head_desc, head_data, _) = ChunkDescriptor::slice(txtr_data, Endian::Little)?;
         ensure!(head_desc.id == K_CHUNK_HEAD);

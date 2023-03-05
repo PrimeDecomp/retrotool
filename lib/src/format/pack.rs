@@ -146,10 +146,10 @@ impl Package<'_> {
     pub fn read_header(data: &[u8], e: Endian) -> Result<Vec<u8>> {
         let (mut pack, pack_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(pack.id == K_FORM_PACK);
-        ensure!(pack.version_a == 1);
+        ensure!(pack.reader_version == 1);
         let (mut tocc, tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.version_a == 3);
+        ensure!(tocc.reader_version == 3);
 
         // Rewrite PACK with only TOCC chunk
         let mut out = Cursor::new(Vec::new());
@@ -165,10 +165,10 @@ impl Package<'_> {
     pub fn read_sparse(data: &[u8], e: Endian) -> Result<Vec<SparsePackageEntry>> {
         let (pack, pack_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(pack.id == K_FORM_PACK);
-        ensure!(pack.version_a == 1);
+        ensure!(pack.reader_version == 1);
         let (tocc, mut tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.version_a == 3);
+        ensure!(tocc.reader_version == 3);
         let mut adir: Option<AssetDirectory> = None;
         let mut strg: HashMap<Uuid, String> = HashMap::new();
         while !tocc_data.is_empty() {
@@ -210,10 +210,10 @@ impl Package<'_> {
     pub fn read_asset(data: &[u8], id: Uuid, e: Endian) -> Result<Vec<u8>> {
         let (pack, pack_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(pack.id == K_FORM_PACK);
-        ensure!(pack.version_a == 1);
+        ensure!(pack.reader_version == 1);
         let (tocc, mut tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.version_a == 3);
+        ensure!(tocc.reader_version == 3);
 
         let mut asset: Option<AssetDirectoryEntry> = None;
         let mut meta: Option<&[u8]> = None;
@@ -276,8 +276,8 @@ impl Package<'_> {
         {
             let (form, _, _) = FormDescriptor::slice(&data, Endian::Little)?;
             ensure!(asset.asset_type == form.id);
-            ensure!(asset.version == form.version_a);
-            ensure!(asset.other_version == form.version_b);
+            ensure!(asset.version == form.reader_version);
+            ensure!(asset.other_version == form.writer_version);
             ensure!(asset.decompressed_size == form.size + 32 /* RFRM */);
         }
 
@@ -286,7 +286,7 @@ impl Package<'_> {
         w.set_position(len); // set to append
 
         // Write custom footer
-        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, version_a: 1, version_b: 1 }.write(
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }.write(
             &mut w,
             Endian::Little,
             |w| {
@@ -329,11 +329,11 @@ impl Package<'_> {
     pub fn read_full(data: &[u8], e: Endian) -> Result<Package> {
         let (pack, pack_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(pack.id == K_FORM_PACK);
-        ensure!(pack.version_a == 1);
+        ensure!(pack.reader_version == 1);
         log::debug!("PACK: {:?}", pack);
         let (tocc, mut tocc_data, _) = FormDescriptor::slice(pack_data, e)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.version_a == 3);
+        ensure!(tocc.reader_version == 3);
         log::debug!("TOCC: {:?}", tocc);
         let mut adir: Option<AssetDirectory> = None;
         let mut meta: HashMap<Uuid, &[u8]> = HashMap::new();
@@ -393,8 +393,8 @@ impl Package<'_> {
             {
                 let (form, _, _) = FormDescriptor::slice(&data, Endian::Little)?;
                 ensure!(asset_entry.asset_type == form.id);
-                ensure!(asset_entry.version == form.version_a);
-                ensure!(asset_entry.other_version == form.version_b);
+                ensure!(asset_entry.version == form.reader_version);
+                ensure!(asset_entry.other_version == form.writer_version);
                 ensure!(asset_entry.decompressed_size == form.size + 32 /* RFRM */);
             }
 
@@ -450,11 +450,11 @@ impl Package<'_> {
             }
         }
         let mut adir_pos = 0;
-        FormDescriptor { size: 0, unk: 0, id: K_FORM_PACK, version_a: 1, version_b: 1 }.write(
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_PACK, reader_version: 1, writer_version: 1 }.write(
             w,
             e,
             |w| {
-                FormDescriptor { size: 0, unk: 0, id: K_FORM_TOCC, version_a: 3, version_b: 3 }
+                FormDescriptor { size: 0, unk: 0, id: K_FORM_TOCC, reader_version: 3, writer_version: 3 }
                     .write(w, e, |w| {
                         ChunkDescriptor { id: K_CHUNK_ADIR, size: 0, unk: 1, skip: 0 }.write(
                             w,

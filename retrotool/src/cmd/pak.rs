@@ -100,7 +100,7 @@ fn extract(args: ExtractArgs) -> Result<()> {
         file.write_all(&asset.data)?;
 
         // Write custom footer
-        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, version_a: 1, version_b: 1 }.write(
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }.write(
             &mut file,
             Endian::Little,
             |w| {
@@ -157,7 +157,7 @@ fn package(args: PackageArgs) -> Result<()> {
         // log::info!("Found type {} version {}, {}", form.id, form.version, form.other_version);
         let (foot, mut foot_data, _) = FormDescriptor::slice(remain, Endian::Little)?;
         ensure!(foot.id == K_FORM_FOOT);
-        ensure!(foot.version_a == 1);
+        ensure!(foot.reader_version == 1);
         let mut ainfo: Option<AssetInfo> = None;
         let mut meta: Option<&[u8]> = None;
         let mut name: Option<String> = None;
@@ -187,8 +187,8 @@ fn package(args: PackageArgs) -> Result<()> {
             data: Cow::Owned(data[..data.len() - remain.len()].to_vec()),
             meta: meta.map(|data| Cow::Owned(data.to_vec())),
             info: ainfo,
-            version: form.version_a,
-            other_version: form.version_b,
+            version: form.reader_version,
+            other_version: form.writer_version,
         });
     }
     package.assets.sort_by_key(|a| a.id);

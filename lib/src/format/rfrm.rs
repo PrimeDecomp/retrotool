@@ -15,8 +15,8 @@ pub struct FormDescriptor {
     pub size: u64,
     pub unk: u64,
     pub id: FourCC,
-    pub version_a: u32,
-    pub version_b: u32,
+    pub reader_version: u32,
+    pub writer_version: u32,
 }
 
 impl FormDescriptor {

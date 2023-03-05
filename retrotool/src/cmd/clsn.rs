@@ -166,17 +166,17 @@ fn convert(args: ConvertArgs) -> Result<()> {
     let (form_desc, mut col_data, remain) = FormDescriptor::slice(&data, Endian::Little)?;
 
     if form_desc.id == K_FORM_DCLN {
-        ensure!(form_desc.version_a == K_DCLN_READER_VERSION);
-        ensure!(form_desc.version_b == K_DCLN_WRITER_VERSION);
+        ensure!(form_desc.reader_version == K_DCLN_READER_VERSION);
+        ensure!(form_desc.writer_version == K_DCLN_WRITER_VERSION);
     } else if form_desc.id == K_FORM_CLSN {
-        ensure!(form_desc.version_a == K_CLSN_READER_VERSION);
-        ensure!(form_desc.version_b == K_CLSN_WRITER_VERSION);
+        ensure!(form_desc.reader_version == K_CLSN_READER_VERSION);
+        ensure!(form_desc.writer_version == K_CLSN_WRITER_VERSION);
     }
 
     let (foot_desc, _, remain) = FormDescriptor::slice(remain, Endian::Little)?;
     ensure!(foot_desc.id == K_FORM_FOOT);
-    ensure!(foot_desc.version_a == 1);
-    ensure!(foot_desc.version_b == 1);
+    ensure!(foot_desc.reader_version == 1);
+    ensure!(foot_desc.writer_version == 1);
     ensure!(remain.is_empty());
 
     //let mut bounds: Option<CAABox> = None;

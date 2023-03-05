@@ -784,14 +784,14 @@ impl ModelData {
         let (cmdl_desc, mut cmdl_data, _) = FormDescriptor::slice(data, Endian::Little)?;
         ensure!(cmdl_desc.id == K_FORM_CMDL || cmdl_desc.id == K_FORM_SMDL || cmdl_desc.id == K_FORM_WMDL);
         if cmdl_desc.id == K_FORM_CMDL {
-            ensure!(cmdl_desc.version_a == 114);
-            ensure!(cmdl_desc.version_b == 125);
+            ensure!(cmdl_desc.reader_version == 114);
+            ensure!(cmdl_desc.writer_version == 125);
         } else if cmdl_desc.id == K_FORM_SMDL {
-            ensure!(cmdl_desc.version_a == 127);
-            ensure!(cmdl_desc.version_b == 133);
+            ensure!(cmdl_desc.reader_version == 127);
+            ensure!(cmdl_desc.writer_version == 133);
         } else if cmdl_desc.id == K_FORM_WMDL {
-            ensure!(cmdl_desc.version_a == 118);
-            ensure!(cmdl_desc.version_b == 124);
+            ensure!(cmdl_desc.reader_version == 118);
+            ensure!(cmdl_desc.writer_version == 124);
         }
 
 

@@ -15,8 +15,8 @@ pub fn locate_meta(file_data: &[u8], e: Endian) -> Result<&[u8]> {
     let (_, _, remain) = FormDescriptor::slice(file_data, e)?;
     let (foot_desc, mut foot_data, remain) = FormDescriptor::slice(remain, Endian::Little)?;
     ensure!(foot_desc.id == K_FORM_FOOT);
-    ensure!(foot_desc.version_a == 1);
-    ensure!(foot_desc.version_b == 1);
+    ensure!(foot_desc.reader_version == 1);
+    ensure!(foot_desc.writer_version == 1);
     ensure!(remain.is_empty());
 
     while !foot_data.is_empty() {
