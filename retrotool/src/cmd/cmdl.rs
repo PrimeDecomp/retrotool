@@ -174,32 +174,33 @@ fn convert(args: ConvertArgs) -> Result<()> {
             continue;
         }
 
-        let mut reader = Cursor::new(&*buf);
-        let mut new_buf: Vec<u8> =
-            Vec::with_capacity(info.vertex_count as usize * info.out_stride as usize);
+        let mut reader = Cursor::new(&**buf);
+        let mut out_buf: Vec<u8> = vec![0; info.vertex_count as usize * info.out_stride as usize];
+        let mut w = Cursor::new(&mut *out_buf);
         let mut tmp_buf = vec![0u8; 16]; // max size of attribute
+        let mut in_buf = vec![0u8; info.in_stride as usize];
         for _ in 0..info.vertex_count as usize {
+            reader.read_exact(&mut in_buf)?;
+            let mut r = Cursor::new(&*in_buf);
             for attribute in &info.attributes {
+                r.set_position(attribute.in_offset as u64);
                 if attribute.in_format == attribute.out_format {
                     let tmp = &mut tmp_buf[0..attribute.in_size as usize];
-                    reader.read_exact(tmp)?;
-                    new_buf.write_all(tmp)?;
+                    r.read_exact(tmp)?;
+                    w.write_all(tmp)?;
                 } else {
                     match (attribute.in_format, attribute.out_format) {
                         (EVertexDataFormat::R16Float, EVertexDataFormat::R32Float) => {
-                            let tmp: R16F = reader.read_type(Endian::Little)?;
-                            Cursor::new(&mut tmp_buf).write_type(&tmp, Endian::Little)?;
-                            new_buf.write_all(&tmp_buf[0..4])?;
+                            let tmp: R16F = r.read_type(Endian::Little)?;
+                            w.write_type(&tmp, Endian::Little)?;
                         }
                         (EVertexDataFormat::Rg16Float, EVertexDataFormat::Rg32Float) => {
-                            let tmp: Rg16F = reader.read_type(Endian::Little)?;
-                            Cursor::new(&mut tmp_buf).write_type(&tmp, Endian::Little)?;
-                            new_buf.write_all(&tmp_buf[0..8])?;
+                            let tmp: Rg16F = r.read_type(Endian::Little)?;
+                            w.write_type(&tmp, Endian::Little)?;
                         }
                         (EVertexDataFormat::Rgba16Float, EVertexDataFormat::Rgba32Float) => {
-                            let tmp: Rgba16F = reader.read_type(Endian::Little)?;
-                            Cursor::new(&mut tmp_buf).write_type(&tmp, Endian::Little)?;
-                            new_buf.write_all(&tmp_buf[0..16])?;
+                            let tmp: Rgba16F = r.read_type(Endian::Little)?;
+                            w.write_type(&tmp, Endian::Little)?;
                         }
                         (in_format, out_format) => {
                             todo!("Convertion from {in_format:?} => {out_format:?}")
@@ -208,7 +209,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
                 }
             }
         }
-        *buf = new_buf;
+        *buf = out_buf;
     }
 
     DirBuilder::new().recursive(true).create(&args.out_dir)?;
