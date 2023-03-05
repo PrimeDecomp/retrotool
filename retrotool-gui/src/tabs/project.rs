@@ -3,7 +3,7 @@ use bevy::{
     prelude::*,
 };
 use egui::{text::LayoutJob, Color32, TextFormat, Widget};
-use retrolib::format::{cmdl::K_FORM_CMDL, txtr::K_FORM_TXTR, FourCC};
+use retrolib::format::{cmdl::{K_FORM_CMDL, K_FORM_SMDL, K_FORM_WMDL}, txtr::K_FORM_TXTR, FourCC};
 
 use crate::{
     icon,
@@ -41,7 +41,7 @@ impl SystemTab for ProjectTab {
                             "{} {} {}",
                             match entry.kind {
                                 K_FORM_TXTR => icon::TEXTURE,
-                                K_FORM_CMDL => icon::FILE_3D,
+                                K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => icon::FILE_3D,
                                 K_FORM_FMV0 => icon::FILE_MOVIE,
                                 K_FORM_ROOM => icon::SCENE_DATA,
                                 _ => icon::FILE,
@@ -77,7 +77,7 @@ impl SystemTab for ProjectTab {
                                     loaded_texture: None,
                                 }));
                             }
-                            K_FORM_CMDL => {
+                            K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {
                                 let handle = server
                                     .load::<ModelAsset, _>(format!("{}.{}", entry.id, entry.kind));
                                 state.open_tab = Some(TabType::Model(ModelTab {

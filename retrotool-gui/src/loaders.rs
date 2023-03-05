@@ -297,7 +297,7 @@ impl AssetLoader for ModelAssetLoader {
         })
     }
 
-    fn extensions(&self) -> &[&str] { &["cmdl"] }
+    fn extensions(&self) -> &[&str] { &["cmdl", "smdl", "wmdl"] }
 }
 
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
