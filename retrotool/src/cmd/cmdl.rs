@@ -1,9 +1,9 @@
 use std::{
     collections::HashMap,
     fs,
-    fs::DirBuilder,
+    fs::{DirBuilder, File},
     io::{Cursor, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{bail, ensure, Result};
@@ -11,7 +11,9 @@ use argh::FromArgs;
 use binrw::{binrw, BinReaderExt, BinWriterExt, Endian};
 use gltf_json as json;
 use half::f16;
+use image::ColorType;
 use json::validation::Checked::Valid;
+use png::SrgbRenderingIntent;
 use retrolib::{
     format::{
         cmdl::{
@@ -19,6 +21,7 @@ use retrolib::{
             EVertexComponent, EVertexDataFormat, ModelData,
         },
         foot::locate_meta,
+        txtr::{texture_to_image, TextureData},
     },
     util::file::map_file,
 };
@@ -113,6 +116,7 @@ struct Rgba16F {
 
 fn convert(args: ConvertArgs) -> Result<()> {
     let data = map_file(&args.input)?;
+    let dir = args.input.parent().unwrap_or(Path::new("."));
     let meta = locate_meta(&data, Endian::Little)?;
     let ModelData { head, mtrl, mesh, vbuf, ibuf, mut vtx_buffers, idx_buffers } =
         ModelData::slice(&data, meta, Endian::Little)?;
@@ -472,6 +476,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
         samplers: &mut Vec<json::texture::Sampler>,
         textures: &mut Vec<json::Texture>,
         images: &mut Vec<json::Image>,
+        in_dir: &Path,
+        out_dir: &Path,
     ) -> Result<json::texture::Info> {
         let Some(usage) = &texture.usage else { bail!("Texture without usage!") };
         let texture_idx = if let Some(&existing) = map.get(&texture.id) {
@@ -522,7 +528,43 @@ fn convert(args: ConvertArgs) -> Result<()> {
                 extensions: None,
                 extras: None,
             });
-            print!("{} ", texture.id);
+            // TODO: please clean up
+            {
+                println!("Converting TXTR {}", texture.id);
+                let txtr_file = map_file(in_dir.join(format!("{}.TXTR", texture.id)))?;
+                let meta = locate_meta(&txtr_file, Endian::Little)?;
+                let txtr = TextureData::slice(&txtr_file, meta, Endian::Little)?;
+                let image = texture_to_image(&txtr)?;
+                let mut f = File::create(out_dir.join(format!("{}.png", texture.id)))?;
+                let mut p = png::Encoder::new(&mut f, image.width(), image.height());
+                if txtr.head.format.is_srgb() {
+                    p.set_srgb(SrgbRenderingIntent::Perceptual);
+                }
+                p.set_color(match image.color() {
+                    ColorType::L8 | ColorType::L16 => png::ColorType::Grayscale,
+                    ColorType::La8 | ColorType::La16 => png::ColorType::GrayscaleAlpha,
+                    ColorType::Rgb8 | ColorType::Rgb16 | ColorType::Rgb32F => png::ColorType::Rgb,
+                    ColorType::Rgba8 | ColorType::Rgba16 | ColorType::Rgba32F => {
+                        png::ColorType::Rgba
+                    }
+                    color => todo!("PNG {color:?}"),
+                });
+                p.set_depth(match image.color() {
+                    ColorType::L8 | ColorType::La8 | ColorType::Rgb8 | ColorType::Rgba8 => {
+                        png::BitDepth::Eight
+                    }
+                    ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16 => {
+                        png::BitDepth::Sixteen
+                    }
+                    color => todo!("PNG {color:?}"),
+                });
+                p.add_text_chunk("TXTR".into(), format!("{}", texture.id))?;
+                let mut w = p.write_header()?;
+                w.write_image_data(image.as_bytes())?;
+                w.finish()?;
+                f.flush()?;
+            }
+            map.insert(texture.id, texture_idx);
             texture_idx
         };
         Ok(json::texture::Info {
@@ -533,7 +575,6 @@ fn convert(args: ConvertArgs) -> Result<()> {
         })
     }
 
-    println!("Texture IDs:");
     let mut json_materials = Vec::with_capacity(mtrl.materials.len());
     for mat in &mtrl.materials {
         let mut json_material = json::Material {
@@ -568,6 +609,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                                 &mut json_samplers,
                                 &mut json_textures,
                                 &mut json_images,
+                                dir,
+                                &args.out_dir,
                             )?);
                     }
                     _ => bail!("Unsupported data type for DIFT"),
@@ -589,6 +632,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                             &mut json_samplers,
                             &mut json_textures,
                             &mut json_images,
+                            dir,
+                            &args.out_dir,
                         )?);
                     }
                     _ => bail!("Unsupported data type for ICAN"),
@@ -608,6 +653,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                             &mut json_samplers,
                             &mut json_textures,
                             &mut json_images,
+                            dir,
+                            &args.out_dir,
                         )?;
                         json_material.normal_texture = Some(json::material::NormalTexture {
                             index: info.index,
@@ -630,6 +677,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                                 &mut json_samplers,
                                 &mut json_textures,
                                 &mut json_images,
+                                dir,
+                                &args.out_dir,
                             )?);
                     }
                     _ => bail!("Unsupported data type for BCLR"),
@@ -647,6 +696,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                                 &mut json_samplers,
                                 &mut json_textures,
                                 &mut json_images,
+                                dir,
+                                &args.out_dir,
                             )?);
                     }
                     _ => bail!("Unsupported data type for METL"),
@@ -663,6 +714,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                                 &mut json_samplers,
                                 &mut json_textures,
                                 &mut json_images,
+                                dir,
+                                &args.out_dir,
                             )?);
                     }
                     _ => bail!("Unsupported data type for BCLR"),
@@ -680,6 +733,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                                 &mut json_samplers,
                                 &mut json_textures,
                                 &mut json_images,
+                                dir,
+                                &args.out_dir,
                             )?);
                     }
                     _ => bail!("Unsupported data type for MTLL"),
@@ -692,6 +747,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
                             &mut json_samplers,
                             &mut json_textures,
                             &mut json_images,
+                            dir,
+                            &args.out_dir,
                         )?;
                         json_material.normal_texture = Some(json::material::NormalTexture {
                             index: info.index,
@@ -711,7 +768,6 @@ fn convert(args: ConvertArgs) -> Result<()> {
         }
         json_materials.push(json_material);
     }
-    println!();
 
     let mut json_meshes = Vec::with_capacity(mesh.meshes.len());
     for (mesh_idx, mesh) in mesh.meshes.iter().enumerate() {

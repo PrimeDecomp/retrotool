@@ -19,8 +19,10 @@ ddsfile = { git = "https://github.com/encounter/ddsfile", rev = "880f04c1dffa680
 env_logger = "0.10.0"
 gltf-json = { version = "1.1.0", features = ["names", "extras"] }
 half = "2.2.1"
+image = "0.24.5"
 log = "0.4.17"
 memmap2 = "0.5.8"
+png = "0.17.7"
 retrolib = { path = "../lib" }
 serde_json = "1.0.93"
 tegra_swizzle = "0.3.0"

@@ -7,7 +7,7 @@ use bevy::{
 use bevy_egui::EguiContext;
 use retrolib::format::txtr::{ETextureFormat, ETextureType};
 
-use crate::{loaders::TextureAsset, tabs::SystemTab, AssetRef, TabState, icon};
+use crate::{icon, loaders::TextureAsset, tabs::SystemTab, AssetRef, TabState};
 
 pub struct LoadedTexture {
     pub texture_ids: Vec<egui::TextureId>,
@@ -31,9 +31,9 @@ impl SystemTab for TextureTab {
         let (textures, mut images) = query;
         let Some(txtr) = textures.get(&self.handle) else { return; };
         let mut texture_ids = Vec::new();
-        if let Some(rgba) = &txtr.rgba {
+        if let Some(rgba) = &txtr.decompressed {
             let image_handle = images.add(Image {
-                data: rgba.clone(),
+                data: rgba.to_rgba8().into_raw(),
                 texture_descriptor: TextureDescriptor {
                     label: None,
                     size: Extent3d {
@@ -72,17 +72,7 @@ impl SystemTab for TextureTab {
                         },
                         mip_level_count: txtr.inner.head.mip_sizes.len() as u32,
                         sample_count: 1,
-                        dimension: match txtr.inner.head.kind {
-                            ETextureType::_1D => TextureDimension::D1,
-                            ETextureType::_2D => TextureDimension::D2,
-                            ETextureType::_3D => TextureDimension::D3,
-                            ETextureType::Cube => TextureDimension::D2,
-                            ETextureType::_1DArray => TextureDimension::D1,
-                            ETextureType::_2DArray => TextureDimension::D2,
-                            ETextureType::_2DMultisample => TextureDimension::D2,
-                            ETextureType::_2DMultisampleArray => TextureDimension::D2,
-                            ETextureType::CubeArray => TextureDimension::D2,
-                        },
+                        dimension: TextureDimension::D2,
                         format: match txtr.inner.head.format {
                             ETextureFormat::R8Unorm => TextureFormat::Rgba8Unorm,
                             ETextureFormat::R8Snorm => TextureFormat::R8Snorm,
@@ -190,31 +180,31 @@ impl SystemTab for TextureTab {
                 txtr.inner.head.layers,
                 txtr.inner.head.mip_sizes.len()
             ));
+            let w = txtr.inner.head.width;
+            let h = txtr.inner.head.height;
+            let size = egui::Vec2 { x: w as f32, y: h as f32 };
+            let draw_image = |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32| {
+                let min = egui::Vec2 { x: (w * x) as f32, y: (h * y) as f32 };
+                let max = egui::Vec2 { x: (w * (x + 1)) as f32, y: (h * (y + 1)) as f32 };
+                egui::widgets::Image::new(loaded.texture_ids[i], size)
+                    .paint_at(ui, egui::Rect { min: rect.min + min, max: rect.min + max });
+            };
             if txtr.inner.head.kind == ETextureType::Cube && loaded.texture_ids.len() == 6 {
-                let width = txtr.inner.head.width;
-                let height = txtr.inner.head.height;
                 let (_, rect) =
-                    ui.allocate_space(egui::Vec2 { x: (width * 4) as f32, y: (height * 3) as f32 });
-                let size = egui::Vec2 { x: width as f32, y: height as f32 };
-                let mut draw_image = |i: usize, x: u32, y: u32| {
-                    let min = egui::Vec2 { x: (width * x) as f32, y: (height * y) as f32 };
-                    let max =
-                        egui::Vec2 { x: (width * (x + 1)) as f32, y: (height * (y + 1)) as f32 };
-                    egui::widgets::Image::new(loaded.texture_ids[i], size)
-                        .paint_at(ui, egui::Rect { min: rect.min + min, max: rect.min + max });
-                };
-                draw_image(2, 1, 0);
-                draw_image(1, 0, 1);
-                draw_image(4, 1, 1);
-                draw_image(0, 2, 1);
-                draw_image(5, 3, 1);
-                draw_image(3, 1, 2);
+                    ui.allocate_space(egui::Vec2 { x: (w * 4) as f32, y: (h * 3) as f32 });
+                draw_image(ui, &rect, 2, 1, 0);
+                draw_image(ui, &rect, 1, 0, 1);
+                draw_image(ui, &rect, 4, 1, 1);
+                draw_image(ui, &rect, 0, 2, 1);
+                draw_image(ui, &rect, 5, 3, 1);
+                draw_image(ui, &rect, 3, 1, 2);
             } else {
-                for image in &loaded.texture_ids {
-                    ui.add(egui::widgets::Image::new(*image, egui::Vec2 {
-                        x: txtr.inner.head.width as f32,
-                        y: txtr.inner.head.height as f32,
-                    }));
+                let (_, rect) = ui.allocate_space(egui::Vec2 {
+                    x: (w as usize * loaded.texture_ids.len()) as f32,
+                    y: h as f32,
+                });
+                for i in 0..loaded.texture_ids.len() {
+                    draw_image(ui, &rect, i, i as u32, 0);
                 }
             }
         }

@@ -1,4 +1,5 @@
 pub mod astc;
+pub mod bcdec;
 pub mod compression;
 pub mod dds;
 pub mod file;

@@ -1014,9 +1014,9 @@ checksum = "0d261e256854913907f67ed06efbc3338dfe6179796deefc1ff763fc1aee5535"
 
 [[package]]
 name = "bytemuck"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c041d3eab048880cb0b86b256447da3f18859a163c3b8d8893f4e6368abe6393"
+checksum = "17febce684fd15d89027105661fec94afb475cb995fbc59d2865198446ba2eea"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -3052,13 +3052,16 @@ name = "retrolib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "astc-decode",
  "binrw",
  "binrw_derive",
+ "bytemuck",
  "ddsfile",
  "flate2",
+ "image",
  "log",
  "memmap2",
- "tegra_swizzle",
+ "tegra_swizzle 0.3.0 (git+https://github.com/ScanMountGoat/tegra_swizzle?rev=f0cf2c61b78b929381f09dd224ca27fe6929e176)",
  "uuid",
 ]
 
@@ -3074,11 +3077,13 @@ dependencies = [
  "env_logger",
  "gltf-json",
  "half",
+ "image",
  "log",
  "memmap2",
+ "png",
  "retrolib",
  "serde_json",
- "tegra_swizzle",
+ "tegra_swizzle 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
 ]
 
@@ -3410,6 +3415,11 @@ name = "tegra_swizzle"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "898709aaa04e72af51fafa032802e0dee931eee066894478ac0000b4525d30bf"
+
+[[package]]
+name = "tegra_swizzle"
+version = "0.3.0"
+source = "git+https://github.com/ScanMountGoat/tegra_swizzle?rev=f0cf2c61b78b929381f09dd224ca27fe6929e176#f0cf2c61b78b929381f09dd224ca27fe6929e176"
 
 [[package]]
 name = "termcolor"

@@ -286,42 +286,31 @@ impl Package<'_> {
         w.set_position(len); // set to append
 
         // Write custom footer
-        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }.write(
-            &mut w,
-            Endian::Little,
-            |w| {
-                ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(
-                    w,
-                    Endian::Little,
-                    |w| {
-                        w.write_le(&AssetInfo { id, compression_mode, orig_offset: asset.offset })?;
-                        Ok(())
-                    },
-                )?;
-                if let Some(meta) = meta {
-                    let meta_chunk = ChunkDescriptor {
-                        id: K_CHUNK_META,
-                        size: meta.len() as u64,
-                        unk: 0,
-                        skip: 0,
-                    };
-                    w.write_le(&meta_chunk)?;
-                    w.write_all(meta)?;
-                }
-                if let Some(name) = &name {
-                    let bytes = name.as_bytes();
-                    let name_chunk = ChunkDescriptor {
-                        id: K_CHUNK_NAME,
-                        size: bytes.len() as u64,
-                        unk: 0,
-                        skip: 0,
-                    };
-                    w.write_le(&name_chunk)?;
-                    w.write_all(bytes)?;
-                }
-                Ok(())
-            },
-        )?;
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }
+            .write(&mut w, Endian::Little, |w| {
+            ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(
+                w,
+                Endian::Little,
+                |w| {
+                    w.write_le(&AssetInfo { id, compression_mode, orig_offset: asset.offset })?;
+                    Ok(())
+                },
+            )?;
+            if let Some(meta) = meta {
+                let meta_chunk =
+                    ChunkDescriptor { id: K_CHUNK_META, size: meta.len() as u64, unk: 0, skip: 0 };
+                w.write_le(&meta_chunk)?;
+                w.write_all(meta)?;
+            }
+            if let Some(name) = &name {
+                let bytes = name.as_bytes();
+                let name_chunk =
+                    ChunkDescriptor { id: K_CHUNK_NAME, size: bytes.len() as u64, unk: 0, skip: 0 };
+                w.write_le(&name_chunk)?;
+                w.write_all(bytes)?;
+            }
+            Ok(())
+        })?;
 
         Ok(w.into_inner())
     }
@@ -450,65 +439,68 @@ impl Package<'_> {
             }
         }
         let mut adir_pos = 0;
-        FormDescriptor { size: 0, unk: 0, id: K_FORM_PACK, reader_version: 1, writer_version: 1 }.write(
-            w,
-            e,
-            |w| {
-                FormDescriptor { size: 0, unk: 0, id: K_FORM_TOCC, reader_version: 3, writer_version: 3 }
-                    .write(w, e, |w| {
-                        ChunkDescriptor { id: K_CHUNK_ADIR, size: 0, unk: 1, skip: 0 }.write(
-                            w,
-                            e,
-                            |w| {
-                                adir_pos = w.stream_position()?;
-                                w.write_type(&asset_directory, e)?;
-                                Ok(())
-                            },
-                        )?;
-                        ChunkDescriptor { id: K_CHUNK_META, size: 0, unk: 1, skip: 0 }.write(
-                            w,
-                            e,
-                            |w| {
-                                let start = w.stream_position()?;
-                                w.write_type(&metadata, e)?;
-                                for (asset, entry) in self
-                                    .assets
-                                    .iter()
-                                    .filter(|a| a.meta.is_some())
-                                    .zip(&mut metadata.entries)
-                                {
-                                    entry.offset = (w.stream_position()? - start) as u32;
-                                    let data = asset.meta.as_ref().unwrap();
-                                    w.write_type(&(data.len() as u32), e)?;
-                                    w.write_all(data)?;
-                                }
-                                let end = w.stream_position()?;
-                                w.seek(SeekFrom::Start(start))?;
-                                w.write_type(&metadata, e)?;
-                                w.seek(SeekFrom::Start(end))?;
-                                Ok(())
-                            },
-                        )?;
-                        ChunkDescriptor { id: K_CHUNK_STRG, size: 0, unk: 1, skip: 0 }.write(
-                            w,
-                            e,
-                            |w| {
-                                w.write_type(&string_table, e)?;
-                                Ok(())
-                            },
-                        )?;
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_PACK, reader_version: 1, writer_version: 1 }
+            .write(w, e, |w| {
+            FormDescriptor {
+                size: 0,
+                unk: 0,
+                id: K_FORM_TOCC,
+                reader_version: 3,
+                writer_version: 3,
+            }
+            .write(w, e, |w| {
+                ChunkDescriptor { id: K_CHUNK_ADIR, size: 0, unk: 1, skip: 0 }.write(
+                    w,
+                    e,
+                    |w| {
+                        adir_pos = w.stream_position()?;
+                        w.write_type(&asset_directory, e)?;
                         Ok(())
-                    })?;
-                let mut entries: Vec<(&Asset, &mut AssetDirectoryEntry)> =
-                    self.assets.iter().zip(&mut asset_directory.entries).collect();
-                entries.sort_by_key(|(a, _)| a.info.orig_offset);
-                for (asset, entry) in entries {
-                    entry.offset = w.stream_position()?;
-                    w.write_all(&asset.data)?;
-                }
+                    },
+                )?;
+                ChunkDescriptor { id: K_CHUNK_META, size: 0, unk: 1, skip: 0 }.write(
+                    w,
+                    e,
+                    |w| {
+                        let start = w.stream_position()?;
+                        w.write_type(&metadata, e)?;
+                        for (asset, entry) in self
+                            .assets
+                            .iter()
+                            .filter(|a| a.meta.is_some())
+                            .zip(&mut metadata.entries)
+                        {
+                            entry.offset = (w.stream_position()? - start) as u32;
+                            let data = asset.meta.as_ref().unwrap();
+                            w.write_type(&(data.len() as u32), e)?;
+                            w.write_all(data)?;
+                        }
+                        let end = w.stream_position()?;
+                        w.seek(SeekFrom::Start(start))?;
+                        w.write_type(&metadata, e)?;
+                        w.seek(SeekFrom::Start(end))?;
+                        Ok(())
+                    },
+                )?;
+                ChunkDescriptor { id: K_CHUNK_STRG, size: 0, unk: 1, skip: 0 }.write(
+                    w,
+                    e,
+                    |w| {
+                        w.write_type(&string_table, e)?;
+                        Ok(())
+                    },
+                )?;
                 Ok(())
-            },
-        )?;
+            })?;
+            let mut entries: Vec<(&Asset, &mut AssetDirectoryEntry)> =
+                self.assets.iter().zip(&mut asset_directory.entries).collect();
+            entries.sort_by_key(|(a, _)| a.info.orig_offset);
+            for (asset, entry) in entries {
+                entry.offset = w.stream_position()?;
+                w.write_all(&asset.data)?;
+            }
+            Ok(())
+        })?;
 
         // Write updated ADIR offsets
         let pos = w.stream_position()?;

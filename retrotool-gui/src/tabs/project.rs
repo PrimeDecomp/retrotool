@@ -3,7 +3,11 @@ use bevy::{
     prelude::*,
 };
 use egui::{text::LayoutJob, Color32, TextFormat, Widget};
-use retrolib::format::{cmdl::{K_FORM_CMDL, K_FORM_SMDL, K_FORM_WMDL}, txtr::K_FORM_TXTR, FourCC};
+use retrolib::format::{
+    cmdl::{K_FORM_CMDL, K_FORM_SMDL, K_FORM_WMDL},
+    txtr::K_FORM_TXTR,
+    FourCC,
+};
 
 use crate::{
     icon,

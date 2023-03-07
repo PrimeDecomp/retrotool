@@ -782,18 +782,21 @@ pub struct ModelData {
 impl ModelData {
     pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<ModelData> {
         let (cmdl_desc, mut cmdl_data, _) = FormDescriptor::slice(data, Endian::Little)?;
-        ensure!(cmdl_desc.id == K_FORM_CMDL || cmdl_desc.id == K_FORM_SMDL || cmdl_desc.id == K_FORM_WMDL);
-        if cmdl_desc.id == K_FORM_CMDL {
-            ensure!(cmdl_desc.reader_version == 114);
-            ensure!(cmdl_desc.writer_version == 125);
-        } else if cmdl_desc.id == K_FORM_SMDL {
-            ensure!(cmdl_desc.reader_version == 127);
-            ensure!(cmdl_desc.writer_version == 133);
-        } else if cmdl_desc.id == K_FORM_WMDL {
-            ensure!(cmdl_desc.reader_version == 118);
-            ensure!(cmdl_desc.writer_version == 124);
+        match cmdl_desc.id {
+            K_FORM_CMDL => {
+                ensure!(cmdl_desc.reader_version == 114);
+                ensure!(cmdl_desc.writer_version == 125);
+            }
+            K_FORM_SMDL => {
+                ensure!(cmdl_desc.reader_version == 127);
+                ensure!(cmdl_desc.writer_version == 133);
+            }
+            K_FORM_WMDL => {
+                ensure!(cmdl_desc.reader_version == 118);
+                ensure!(cmdl_desc.writer_version == 124);
+            }
+            id => bail!("Unknown FourCC {:?}", id),
         }
-
 
         let meta: SModelMetaData = Cursor::new(meta).read_type(e)?;
         let vtx_buffers = decompress_gpu_buffers(data, &meta.read_info, &meta.vtx_buffer_info)?;
@@ -807,9 +810,9 @@ impl ModelData {
         while !cmdl_data.is_empty() {
             let (chunk_desc, chunk_data, remain) = ChunkDescriptor::slice(cmdl_data, e)?;
             match chunk_desc.id {
-                K_CHUNK_WDHD => head = Some(Cursor::new(chunk_data).read_type(e)?),
-                K_CHUNK_SKHD => head = Some(Cursor::new(chunk_data).read_type(e)?),
-                K_CHUNK_HEAD => head = Some(Cursor::new(chunk_data).read_type(e)?),
+                K_CHUNK_HEAD | K_CHUNK_SKHD | K_CHUNK_WDHD => {
+                    head = Some(Cursor::new(chunk_data).read_type(e)?)
+                }
                 K_CHUNK_MTRL => mtrl = Some(Cursor::new(chunk_data).read_type(e)?),
                 K_CHUNK_MESH => mesh = Some(Cursor::new(chunk_data).read_type(e)?),
                 K_CHUNK_VBUF => vbuf = Some(Cursor::new(chunk_data).read_type(e)?),

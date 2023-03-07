@@ -100,42 +100,31 @@ fn extract(args: ExtractArgs) -> Result<()> {
         file.write_all(&asset.data)?;
 
         // Write custom footer
-        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }.write(
-            &mut file,
-            Endian::Little,
-            |w| {
-                ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(
-                    w,
-                    Endian::Little,
-                    |w| {
-                        w.write_le(&asset.info)?;
-                        Ok(())
-                    },
-                )?;
-                if let Some(meta) = &asset.meta {
-                    let meta_chunk = ChunkDescriptor {
-                        id: K_CHUNK_META,
-                        size: meta.len() as u64,
-                        unk: 0,
-                        skip: 0,
-                    };
-                    w.write_le(&meta_chunk)?;
-                    w.write_all(meta)?;
-                }
-                if let Some(name) = &asset.name {
-                    let bytes = name.as_bytes();
-                    let name_chunk = ChunkDescriptor {
-                        id: K_CHUNK_NAME,
-                        size: bytes.len() as u64,
-                        unk: 0,
-                        skip: 0,
-                    };
-                    w.write_le(&name_chunk)?;
-                    w.write_all(bytes)?;
-                }
-                Ok(())
-            },
-        )?;
+        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }
+            .write(&mut file, Endian::Little, |w| {
+            ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(
+                w,
+                Endian::Little,
+                |w| {
+                    w.write_le(&asset.info)?;
+                    Ok(())
+                },
+            )?;
+            if let Some(meta) = &asset.meta {
+                let meta_chunk =
+                    ChunkDescriptor { id: K_CHUNK_META, size: meta.len() as u64, unk: 0, skip: 0 };
+                w.write_le(&meta_chunk)?;
+                w.write_all(meta)?;
+            }
+            if let Some(name) = &asset.name {
+                let bytes = name.as_bytes();
+                let name_chunk =
+                    ChunkDescriptor { id: K_CHUNK_NAME, size: bytes.len() as u64, unk: 0, skip: 0 };
+                w.write_le(&name_chunk)?;
+                w.write_all(bytes)?;
+            }
+            Ok(())
+        })?;
         file.flush()?;
     }
     Ok(())

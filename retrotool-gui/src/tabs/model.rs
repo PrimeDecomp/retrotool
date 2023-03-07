@@ -349,19 +349,23 @@ impl SystemTab for ModelTab {
         for (id, handle) in textures {
             let txtr = texture_assets.get(handle).unwrap();
             let image_handle = images.add(Image {
-                data: txtr.rgba.as_ref().unwrap_or(&txtr.inner.data).clone(),
+                data: txtr
+                    .decompressed
+                    .as_ref()
+                    .map(|i| i.to_rgba8().into_raw())
+                    .unwrap_or_else(|| txtr.inner.data.clone()),
                 texture_descriptor: TextureDescriptor {
                     label: None,
                     size: Extent3d {
                         width: txtr.inner.head.width,
                         height: txtr.inner.head.height,
-                        depth_or_array_layers: if txtr.rgba.is_some() {
+                        depth_or_array_layers: if txtr.decompressed.is_some() {
                             1 // FIXME
                         } else {
                             txtr.inner.head.layers
                         },
                     },
-                    mip_level_count: if txtr.rgba.is_some() {
+                    mip_level_count: if txtr.decompressed.is_some() {
                         1
                     } else {
                         txtr.inner.head.mip_sizes.len() as u32
@@ -378,7 +382,7 @@ impl SystemTab for ModelTab {
                         ETextureType::_2DMultisampleArray => TextureDimension::D2,
                         ETextureType::CubeArray => TextureDimension::D2,
                     },
-                    format: if txtr.rgba.is_some() {
+                    format: if txtr.decompressed.is_some() {
                         if txtr.inner.head.format.is_srgb() {
                             TextureFormat::Rgba8UnormSrgb
                         } else {

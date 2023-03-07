@@ -1,11 +1,9 @@
 use std::{
-    io::Cursor,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 
 use anyhow::Error;
-use astc_decode::{astc_decode, Footprint};
 use bevy::{
     app::{App, Plugin},
     asset::{
@@ -16,14 +14,14 @@ use bevy::{
     utils::HashMap,
 };
 use binrw::Endian;
-use image::RgbaImage;
+use image::DynamicImage;
 use retrolib::{
     format::{
         cmdl::{CMaterialDataInner, ModelData},
         foot::locate_meta,
         mtrl::MaterialData,
         pack::{Package, SparsePackageEntry},
-        txtr::TextureData,
+        txtr::{texture_to_image, TextureData},
     },
     util::file::map_file,
 };
@@ -64,7 +62,7 @@ impl AssetIo for RetroAssetIo {
                     if let Some(package) =
                         packages.iter().find(|p| p.entries.iter().any(|e| e.id == id))
                     {
-                        println!("Loading {} from {}", id, package.path.display());
+                        // println!("Loading {} from {}", id, package.path.display());
                         package_path = Some(package.path.clone());
                     }
                 }
@@ -188,7 +186,7 @@ impl AssetLoader for PackageAssetLoader {
 #[uuid = "83269869-1209-408e-8835-bc6f2496e828"]
 pub struct TextureAsset {
     pub inner: TextureData,
-    pub rgba: Option<Vec<u8>>,
+    pub decompressed: Option<DynamicImage>,
 }
 
 pub struct TextureAssetLoader;
@@ -208,23 +206,11 @@ impl AssetLoader for TextureAssetLoader {
         Box::pin(async move {
             let meta = locate_meta(bytes, Endian::Little)?;
             let data = TextureData::slice(bytes, meta, Endian::Little)?;
-            let mut rgba = None;
-            if data.head.format.is_astc() {
-                let mut image = RgbaImage::new(data.head.width, data.head.height);
-                let (bx, by, _) = data.head.format.block_size();
-                astc_decode(
-                    Cursor::new(&data.data),
-                    data.head.width,
-                    data.head.height,
-                    Footprint::new(bx as u32, by as u32),
-                    |x, y, texel| {
-                        image.put_pixel(x, y, texel.into());
-                    },
-                )?;
-                rgba = Some(image.into_raw());
-            }
-            println!("Loaded texture {:?}", data.head);
-            load_context.set_default_asset(LoadedAsset::new(TextureAsset { inner: data, rgba }));
+            let decompressed =
+                if data.head.format.is_astc() { Some(texture_to_image(&data)?) } else { None };
+            // println!("Loaded texture {:?}", data.head);
+            load_context
+                .set_default_asset(LoadedAsset::new(TextureAsset { inner: data, decompressed }));
             Ok(())
         })
     }
