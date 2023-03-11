@@ -96,8 +96,12 @@ impl AssetIo for RetroAssetIo {
         self.default.get_metadata(path)
     }
 
-    fn watch_path_for_changes(&self, path: &Path) -> anyhow::Result<(), AssetIoError> {
-        self.default.watch_path_for_changes(path)
+    fn watch_path_for_changes(
+        &self,
+        to_watch: &Path,
+        to_reload: Option<PathBuf>,
+    ) -> anyhow::Result<(), AssetIoError> {
+        self.default.watch_path_for_changes(to_watch, to_reload)
     }
 
     fn watch_for_changes(&self) -> anyhow::Result<(), AssetIoError> {

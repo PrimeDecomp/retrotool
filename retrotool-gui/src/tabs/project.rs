@@ -99,4 +99,6 @@ impl SystemTab for ProjectTab {
     }
 
     fn title(&mut self) -> egui::WidgetText { format!("{} Browser", icon::FILEBROWSER).into() }
+
+    fn id(&self) -> String { "project".to_string() }
 }

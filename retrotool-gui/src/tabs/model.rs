@@ -2,7 +2,7 @@ use std::{borrow::Cow, num::NonZeroU8, ops::Range};
 
 use bevy::{
     asset::LoadState,
-    core_pipeline::clear_color::ClearColorConfig,
+    core_pipeline::{clear_color::ClearColorConfig, tonemapping::Tonemapping},
     ecs::system::{lifetimeless::*, *},
     prelude::*,
     render::{
@@ -18,9 +18,8 @@ use bevy::{
     },
     utils::HashMap,
 };
-use bevy::core_pipeline::bloom::BloomSettings;
 use bevy_egui::EguiContext;
-use egui::{Id, PointerButton, Sense};
+use egui::{PointerButton, Sense};
 use half::f16;
 use retrolib::format::{
     cmdl::{
@@ -345,7 +344,7 @@ impl SystemTab for ModelTab {
         if let Some(loaded) = &self.loaded {
             for (entity, _) in &loaded.entities {
                 if let Some(mut commands) = commands.get_entity(*entity) {
-                    commands.insert(Visibility::INVISIBLE);
+                    commands.insert(Visibility::Hidden);
                 }
             }
             return;
@@ -504,6 +503,7 @@ impl SystemTab for ModelTab {
                         }
                     },
                     usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                    view_formats: &[],
                 },
                 sampler_descriptor: sampler_descriptors
                     .get(id)
@@ -822,7 +822,8 @@ impl SystemTab for ModelTab {
             depth: 0.0..1.0,
         };
 
-        let response = ui.interact(rect, Id::new("background"), Sense::click_and_drag());
+        let response =
+            ui.interact(rect, ui.make_persistent_id("background"), Sense::click_and_drag());
 
         let mut commands = query;
         if let Some(loaded) = &mut self.loaded {
@@ -907,31 +908,31 @@ impl SystemTab for ModelTab {
                     },
                     camera: Camera {
                         viewport: Some(viewport),
-                        priority: state.render_layer as isize,
-                        // TOOD bevy 0.10
+                        order: state.render_layer as isize,
                         // hdr: true,
                         ..default()
                     },
-                    // TOOD bevy 0.10
-                    // tonemapping: Tonemapping::TonyMcMapFace,
+                    tonemapping: Tonemapping::TonyMcMapface,
                     transform: loaded.camera_xf,
                     ..default()
                 },
-                // TOOD bevy 0.10
                 // BloomSettings::default(),
                 RenderLayers::layer(state.render_layer),
                 TemporaryLabel,
             ));
-            commands.spawn((
-                DirectionalLightBundle {
-                    directional_light: DirectionalLight { ..default() },
-                    transform: Transform::from_xyz(-30.0, 5.0, 20.0)
-                        .looking_at(Vec3::ZERO, Vec3::Y),
-                    ..default()
-                },
-                RenderLayers::layer(state.render_layer),
-                TemporaryLabel,
-            ));
+            // FIXME: https://github.com/bevyengine/bevy/issues/3462
+            if state.render_layer == 0 {
+                commands.spawn((
+                    DirectionalLightBundle {
+                        directional_light: DirectionalLight { ..default() },
+                        transform: Transform::from_xyz(-30.0, 5.0, 20.0)
+                            .looking_at(Vec3::ZERO, Vec3::Y),
+                        ..default()
+                    },
+                    RenderLayers::layer(state.render_layer),
+                    TemporaryLabel,
+                ));
+            }
 
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(rect.height() * 0.25).show(ui, |ui| {
@@ -939,7 +940,7 @@ impl SystemTab for ModelTab {
                         ui.checkbox(visible, format!("Mesh {idx}"));
                         if let Some(mut commands) = commands.get_entity(*entity) {
                             commands.insert((
-                                if *visible { Visibility::VISIBLE } else { Visibility::INVISIBLE },
+                                if *visible { Visibility::Visible } else { Visibility::Hidden },
                                 RenderLayers::layer(state.render_layer),
                             ));
                         }
@@ -953,4 +954,6 @@ impl SystemTab for ModelTab {
     fn title(&mut self) -> egui::WidgetText {
         format!("{} {} {}", icon::FILE_3D, self.asset_ref.kind, self.asset_ref.id).into()
     }
+
+    fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
 }

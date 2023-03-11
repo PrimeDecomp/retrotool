@@ -4,6 +4,15 @@
 #import bevy_pbr::utils
 #import bevy_pbr::clustered_forward
 #import bevy_pbr::lighting
+#import bevy_pbr::pbr_ambient
+
+#ifdef TONEMAP_IN_SHADER
+#import bevy_core_pipeline::tonemapping
+#endif
+
+#ifdef ENVIRONMENT_MAP
+#import bevy_pbr::environment_map
+#endif
 
 struct CustomMaterial {
     base_color: vec4<f32>,
@@ -329,17 +338,17 @@ struct StandardMaterial {
     alpha_cutoff: f32,
 };
 
-let STANDARD_MATERIAL_FLAGS_BASE_COLOR_TEXTURE_BIT: u32         = 1u;
-let STANDARD_MATERIAL_FLAGS_EMISSIVE_TEXTURE_BIT: u32           = 2u;
-let STANDARD_MATERIAL_FLAGS_METALLIC_ROUGHNESS_TEXTURE_BIT: u32 = 4u;
-let STANDARD_MATERIAL_FLAGS_OCCLUSION_TEXTURE_BIT: u32          = 8u;
-let STANDARD_MATERIAL_FLAGS_DOUBLE_SIDED_BIT: u32               = 16u;
-let STANDARD_MATERIAL_FLAGS_UNLIT_BIT: u32                      = 32u;
-let STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE: u32              = 64u;
-let STANDARD_MATERIAL_FLAGS_ALPHA_MODE_MASK: u32                = 128u;
-let STANDARD_MATERIAL_FLAGS_ALPHA_MODE_BLEND: u32               = 256u;
-let STANDARD_MATERIAL_FLAGS_TWO_COMPONENT_NORMAL_MAP: u32       = 512u;
-let STANDARD_MATERIAL_FLAGS_FLIP_NORMAL_MAP_Y: u32              = 1024u;
+const STANDARD_MATERIAL_FLAGS_BASE_COLOR_TEXTURE_BIT: u32         = 1u;
+const STANDARD_MATERIAL_FLAGS_EMISSIVE_TEXTURE_BIT: u32           = 2u;
+const STANDARD_MATERIAL_FLAGS_METALLIC_ROUGHNESS_TEXTURE_BIT: u32 = 4u;
+const STANDARD_MATERIAL_FLAGS_OCCLUSION_TEXTURE_BIT: u32          = 8u;
+const STANDARD_MATERIAL_FLAGS_DOUBLE_SIDED_BIT: u32               = 16u;
+const STANDARD_MATERIAL_FLAGS_UNLIT_BIT: u32                      = 32u;
+const STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE: u32              = 64u;
+const STANDARD_MATERIAL_FLAGS_ALPHA_MODE_MASK: u32                = 128u;
+const STANDARD_MATERIAL_FLAGS_ALPHA_MODE_BLEND: u32               = 256u;
+const STANDARD_MATERIAL_FLAGS_TWO_COMPONENT_NORMAL_MAP: u32       = 512u;
+const STANDARD_MATERIAL_FLAGS_FLIP_NORMAL_MAP_Y: u32              = 1024u;
 
 // Creates a StandardMaterial with default values
 fn standard_material_new() -> StandardMaterial {
@@ -409,27 +418,6 @@ fn calculate_view(
     return V;
 }
 
-#ifdef TONEMAP_IN_SHADER
-#import bevy_core_pipeline::tonemapping
-#endif
-
-#ifdef TONEMAP_IN_SHADER
-fn tone_mapping(in: vec4<f32>) -> vec4<f32> {
-    // tone_mapping
-    return vec4<f32>(reinhard_luminance(in.rgb), in.a);
-
-    // Gamma correction.
-    // Not needed with sRGB buffer
-    // output_color.rgb = pow(output_color.rgb, vec3(1.0 / 2.2));
-}
-#endif
-
-#ifdef DEBAND_DITHER
-fn dither(color: vec4<f32>, pos: vec2<f32>) -> vec4<f32> {
-    return vec4<f32>(color.rgb + screen_space_dither(pos.xy), color.a);
-}
-#endif
-
 fn pbr(
     in: PbrInput,
 ) -> vec4<f32> {
@@ -461,8 +449,9 @@ fn pbr(
 
     let R = reflect(-in.V, in.N);
 
-    // accumulate color
-    var light_accum: vec3<f32> = vec3<f32>(0.0);
+    let f_ab = F_AB(perceptual_roughness, NdotV);
+
+    var direct_light: vec3<f32> = vec3<f32>(0.0);
 
     let view_z = dot(vec4<f32>(
         view.inverse_view[0].z,
@@ -473,52 +462,61 @@ fn pbr(
     let cluster_index = fragment_cluster_index(in.frag_coord.xy, view_z, in.is_orthographic);
     let offset_and_counts = unpack_offset_and_counts(cluster_index);
 
-    // point lights
+    // Point lights (direct)
     for (var i: u32 = offset_and_counts[0]; i < offset_and_counts[0] + offset_and_counts[1]; i = i + 1u) {
         let light_id = get_light_id(i);
-        let light = point_lights.data[light_id];
         var shadow: f32 = 1.0;
-//        if ((mesh.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-//                && (light.flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+//        if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
+//                && (point_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
 //            shadow = fetch_point_shadow(light_id, in.world_position, in.world_normal);
 //        }
-        let light_contrib = point_light(in.world_position.xyz, light, roughness, NdotV, in.N, in.V, R, F0, diffuse_color);
-        light_accum = light_accum + light_contrib * shadow;
+        let light_contrib = point_light(in.world_position.xyz, light_id, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+        direct_light += light_contrib * shadow;
     }
 
-    // spot lights
+    // Spot lights (direct)
     for (var i: u32 = offset_and_counts[0] + offset_and_counts[1]; i < offset_and_counts[0] + offset_and_counts[1] + offset_and_counts[2]; i = i + 1u) {
         let light_id = get_light_id(i);
-        let light = point_lights.data[light_id];
         var shadow: f32 = 1.0;
-//        if ((mesh.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-//                && (light.flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+//        if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
+//                && (point_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
 //            shadow = fetch_spot_shadow(light_id, in.world_position, in.world_normal);
 //        }
-        let light_contrib = spot_light(in.world_position.xyz, light, roughness, NdotV, in.N, in.V, R, F0, diffuse_color);
-        light_accum = light_accum + light_contrib * shadow;
+        let light_contrib = spot_light(in.world_position.xyz, light_id, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+        direct_light += light_contrib * shadow;
     }
 
+    // Directional lights (direct)
     let n_directional_lights = lights.n_directional_lights;
     for (var i: u32 = 0u; i < n_directional_lights; i = i + 1u) {
-        let light = lights.directional_lights[i];
         var shadow: f32 = 1.0;
-//        if ((mesh.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-//                && (light.flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
-//            shadow = fetch_directional_shadow(i, in.world_position, in.world_normal);
+//        if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
+//                && (lights.directional_lights[i].flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+//            shadow = fetch_directional_shadow(i, in.world_position, in.world_normal, view_z);
 //        }
-        let light_contrib = directional_light(light, roughness, NdotV, in.N, in.V, R, F0, diffuse_color);
-        light_accum = light_accum + light_contrib * shadow;
+        var light_contrib = directional_light(i, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+//#ifdef DIRECTIONAL_LIGHT_SHADOW_MAP_DEBUG_CASCADES
+//        light_contrib = cascade_debug_visualization(light_contrib, i, view_z);
+//#endif
+        direct_light += light_contrib * shadow;
     }
 
-    let diffuse_ambient = EnvBRDFApprox(diffuse_color, 1.0, NdotV);
-    let specular_ambient = EnvBRDFApprox(F0, perceptual_roughness, NdotV);
+    // Ambient light (indirect)
+    var indirect_light = ambient_light(in.world_position, in.N, in.V, NdotV, diffuse_color, F0, perceptual_roughness, occlusion);
 
+    // Environment map light (indirect)
+#ifdef ENVIRONMENT_MAP
+    let environment_light = environment_map_light(perceptual_roughness, roughness, diffuse_color, NdotV, f_ab, in.N, R, F0);
+    indirect_light += (environment_light.diffuse * occlusion) + environment_light.specular;
+#endif
+
+    let emissive_light = emissive.rgb * output_color.a;
+
+    // Total light
     output_color = vec4<f32>(
-        light_accum +
-            (diffuse_ambient + specular_ambient) * lights.ambient_color.rgb * occlusion +
-            emissive.rgb * output_color.a,
-        output_color.a);
+        direct_light + indirect_light + emissive_light,
+        output_color.a
+    );
 
     return output_color;
 }

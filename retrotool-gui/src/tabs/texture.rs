@@ -4,7 +4,7 @@ use bevy::{
     prelude::*,
     render::render_resource::*,
 };
-use bevy_egui::EguiContext;
+use bevy_egui::{EguiContext, EguiUserTextures};
 use retrolib::format::txtr::{ETextureFormat, ETextureType};
 
 use crate::{icon, loaders::TextureAsset, tabs::SystemTab, AssetRef, TabState};
@@ -20,15 +20,16 @@ pub struct TextureTab {
 }
 
 impl SystemTab for TextureTab {
-    type LoadParam = (SRes<Assets<TextureAsset>>, SResMut<Assets<Image>>);
+    type LoadParam =
+        (SRes<Assets<TextureAsset>>, SResMut<Assets<Image>>, SResMut<EguiUserTextures>);
     type UiParam = (SRes<AssetServer>, SRes<Assets<TextureAsset>>);
 
-    fn load(&mut self, ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
         if self.loaded_texture.is_some() {
             return;
         }
 
-        let (textures, mut images) = query;
+        let (textures, mut images, mut egui_textures) = query;
         let Some(txtr) = textures.get(&self.handle) else { return; };
         let mut texture_ids = Vec::new();
         if let Some(rgba) = &txtr.decompressed {
@@ -37,8 +38,8 @@ impl SystemTab for TextureTab {
                 texture_descriptor: TextureDescriptor {
                     label: None,
                     size: Extent3d {
-                        width: txtr.inner.head.width,
-                        height: txtr.inner.head.height,
+                        width: rgba.width(),
+                        height: rgba.height(),
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
@@ -50,11 +51,12 @@ impl SystemTab for TextureTab {
                         TextureFormat::Rgba8Unorm
                     },
                     usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                    view_formats: &[],
                 },
                 sampler_descriptor: default(),
                 texture_view_descriptor: None,
             });
-            texture_ids.push(ctx.add_image(image_handle));
+            texture_ids.push(egui_textures.add_image(image_handle));
         } else {
             let array_stride: usize =
                 (txtr.inner.head.mip_sizes.iter().sum::<u32>() / txtr.inner.head.layers) as usize;
@@ -131,11 +133,12 @@ impl SystemTab for TextureTab {
                             _ => todo!(),
                         },
                         usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                        view_formats: &[],
                     },
                     sampler_descriptor: default(),
                     texture_view_descriptor: None,
                 });
-                texture_ids.push(ctx.add_image(image_handle));
+                texture_ids.push(egui_textures.add_image(image_handle));
             }
         };
         self.loaded_texture = Some(LoadedTexture { texture_ids });
@@ -213,4 +216,6 @@ impl SystemTab for TextureTab {
     fn title(&mut self) -> egui::WidgetText {
         format!("{} {} {}", icon::TEXTURE, self.asset_ref.kind, self.asset_ref.id).into()
     }
+
+    fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
 }

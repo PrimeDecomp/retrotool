@@ -510,9 +510,29 @@ pub fn texture_to_image(texture: &TextureData) -> Result<DynamicImage> {
         ETextureFormat::Rgb8Unorm => DynamicImage::ImageRgb8(
             RgbImage::from_raw(w, h, data.to_vec()).ok_or_else(|| anyhow!("Conversion failed"))?,
         ),
-        ETextureFormat::Rgba8Unorm | ETextureFormat::Rgba8Srgb => DynamicImage::ImageRgba8(
-            RgbaImage::from_raw(w, h, data.to_vec()).ok_or_else(|| anyhow!("Conversion failed"))?,
-        ),
+        ETextureFormat::Rgba8Unorm | ETextureFormat::Rgba8Srgb => {
+            // TODO big hack
+            if texture.head.kind == ETextureType::_3D {
+                let mut image = RgbaImage::new(w * texture.head.layers, h);
+                for (idx, data) in texture
+                    .data
+                    .chunks_exact(texture.head.mip_sizes[0] as usize / texture.head.layers as usize)
+                    .enumerate()
+                {
+                    let input = RgbaImage::from_raw(w, h, data.to_vec())
+                        .ok_or_else(|| anyhow!("Conversion failed"))?;
+                    for (x, y, pixel) in input.enumerate_pixels() {
+                        image.put_pixel(idx as u32 * w + x, y, *pixel);
+                    }
+                }
+                DynamicImage::ImageRgba8(image)
+            } else {
+                DynamicImage::ImageRgba8(
+                    RgbaImage::from_raw(w, h, data.to_vec())
+                        .ok_or_else(|| anyhow!("Conversion failed"))?,
+                )
+            }
+        }
         ETextureFormat::Rgba32Float => DynamicImage::ImageRgba32F(
             Rgba32FImage::from_raw(w, h, bytemuck::cast_vec(data.to_vec()))
                 .ok_or_else(|| anyhow!("Conversion failed"))?,

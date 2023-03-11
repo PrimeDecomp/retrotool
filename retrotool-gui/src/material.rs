@@ -147,11 +147,11 @@ impl Material for CustomMaterial {
         layout: &MeshVertexBufferLayout,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        let mut shader_defs = Vec::new();
+        let mut shader_defs = Vec::<ShaderDefVal>::new();
         let mut vertex_attributes = Vec::new();
         let mut add_attribute = |attr: MeshVertexAttribute, location: u32, define: &str| {
             if layout.contains(attr.clone()) {
-                shader_defs.push(String::from(define));
+                shader_defs.push(ShaderDefVal::from(define));
                 vertex_attributes.push(attr.at_shader_location(location));
             }
         };
@@ -169,7 +169,7 @@ impl Material for CustomMaterial {
         if layout.contains(Mesh::ATTRIBUTE_JOINT_INDEX)
             && layout.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT)
         {
-            shader_defs.push(String::from("SKINNED"));
+            shader_defs.push(ShaderDefVal::from("SKINNED"));
             vertex_attributes.push(Mesh::ATTRIBUTE_JOINT_INDEX.at_shader_location(10));
             vertex_attributes.push(Mesh::ATTRIBUTE_JOINT_WEIGHT.at_shader_location(11));
         }

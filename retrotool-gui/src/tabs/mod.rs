@@ -37,6 +37,8 @@ pub trait SystemTab {
     );
 
     fn title(&mut self) -> egui::WidgetText;
+
+    fn id(&self) -> String;
 }
 
 pub fn load_tab<T: SystemTab + 'static>(world: &mut World, ctx: &mut EguiContext, tab: &mut T) {
@@ -52,7 +54,9 @@ fn render_tab<T: SystemTab + 'static>(
     tab_state: &mut TabState,
 ) {
     let mut state: SystemState<T::UiParam> = SystemState::new(world);
-    tab.ui(ui, state.get_mut(world), tab_state);
+    ui.push_id(tab.id(), |ui| {
+        tab.ui(ui, state.get_mut(world), tab_state);
+    });
     state.apply(world);
 }
 
