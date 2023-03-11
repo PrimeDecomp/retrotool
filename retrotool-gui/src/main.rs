@@ -1,5 +1,6 @@
 mod icon;
 mod loaders;
+mod material;
 mod tabs;
 
 use std::path::PathBuf;
@@ -16,7 +17,8 @@ use crate::{
         package_loader_system, MaterialAssetLoader, ModelAssetLoader, PackageAssetLoader,
         PackageDirectory, RetroAssetIoPlugin, TextureAssetLoader,
     },
-    tabs::{load_tab, model::TemporaryTag, project::ProjectTab, TabState, TabType, TabViewer},
+    material::CustomMaterial,
+    tabs::{load_tab, model::TemporaryLabel, project::ProjectTab, TabState, TabType, TabViewer},
 };
 
 #[derive(Default, Resource)]
@@ -29,12 +31,16 @@ fn main() {
     }
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.05)))
-        .insert_resource(Msaa { samples: 4 })
+        // .insert_resource(Msaa { samples: 4 })
         .insert_resource(bevy::render::settings::WgpuSettings {
             features: bevy::render::settings::WgpuFeatures::TEXTURE_COMPRESSION_BC,
             ..default()
         })
         .insert_resource(bevy::winit::WinitSettings::desktop_app())
+        // .insert_resource(AmbientLight {
+        //     color: Color::rgb(1.0, 1.0, 1.0),
+        //     brightness: 0.6,
+        // })
         .insert_resource(file_open)
         .init_resource::<UiState>()
         .init_resource::<Packages>()
@@ -53,6 +59,7 @@ fn main() {
                 })
                 .add_before::<AssetPlugin, _>(RetroAssetIoPlugin),
         )
+        .add_plugin(MaterialPlugin::<CustomMaterial>::default())
         .add_plugin(PackageAssetLoader)
         .add_plugin(TextureAssetLoader)
         .add_plugin(ModelAssetLoader)
@@ -165,7 +172,7 @@ fn ui_system(world: &mut World) {
 
             // Remove all temporary entities
             let mut to_remove = vec![];
-            for (entity, _) in world.query::<(Entity, With<TemporaryTag>)>().iter(world) {
+            for (entity, _) in world.query::<(Entity, With<TemporaryLabel>)>().iter(world) {
                 to_remove.push(entity);
             }
             for entity in to_remove {
@@ -191,7 +198,7 @@ fn ui_system(world: &mut World) {
 
             if viewer.state.render_layer == 0 {
                 // Spawn a camera to just clear the screen
-                world.spawn((Camera3dBundle::default(), TemporaryTag));
+                world.spawn((Camera3dBundle::default(), TemporaryLabel));
             }
         });
     });

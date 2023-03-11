@@ -20,5 +20,5 @@ flate2 = "1.0.25"
 image = "0.24.5"
 log = "0.4.17"
 memmap2 = "0.5.9"
-tegra_swizzle = { git = "https://github.com/ScanMountGoat/tegra_swizzle", rev = "f0cf2c61b78b929381f09dd224ca27fe6929e176" }
+tegra_swizzle = "0.3.1"
 uuid = "1.3.0"

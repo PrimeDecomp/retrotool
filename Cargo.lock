@@ -3061,7 +3061,7 @@ dependencies = [
  "image",
  "log",
  "memmap2",
- "tegra_swizzle 0.3.0 (git+https://github.com/ScanMountGoat/tegra_swizzle?rev=f0cf2c61b78b929381f09dd224ca27fe6929e176)",
+ "tegra_swizzle",
  "uuid",
 ]
 
@@ -3083,7 +3083,7 @@ dependencies = [
  "png",
  "retrolib",
  "serde_json",
- "tegra_swizzle 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tegra_swizzle",
  "uuid",
 ]
 
@@ -3412,14 +3412,9 @@ dependencies = [
 
 [[package]]
 name = "tegra_swizzle"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "898709aaa04e72af51fafa032802e0dee931eee066894478ac0000b4525d30bf"
-
-[[package]]
-name = "tegra_swizzle"
-version = "0.3.0"
-source = "git+https://github.com/ScanMountGoat/tegra_swizzle?rev=f0cf2c61b78b929381f09dd224ca27fe6929e176#f0cf2c61b78b929381f09dd224ca27fe6929e176"
+checksum = "d5a696f1997cdcb21949d259b95ccfad64fe5207897c4a4aa34faa4c34bc1678"
 
 [[package]]
 name = "termcolor"

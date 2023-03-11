@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ops::Range};
+use std::{borrow::Cow, num::NonZeroU8, ops::Range};
 
 use bevy::{
     asset::LoadState,
@@ -18,6 +18,7 @@ use bevy::{
     },
     utils::HashMap,
 };
+use bevy::core_pipeline::bloom::BloomSettings;
 use bevy_egui::EguiContext;
 use egui::{Id, PointerButton, Sense};
 use half::f16;
@@ -26,13 +27,17 @@ use retrolib::format::{
         CMaterialDataInner, EBufferType, EMaterialDataId, EVertexComponent, EVertexDataFormat,
         ModelData, STextureUsageInfo, SVertexDataComponent,
     },
-    txtr::{ETextureFormat, ETextureType},
+    txtr::{
+        ETextureAnisotropicRatio, ETextureFilter, ETextureFormat, ETextureMipFilter, ETextureType,
+        ETextureWrap, STextureSamplerData,
+    },
 };
 use uuid::Uuid;
 
 use crate::{
     icon,
     loaders::{ModelAsset, TextureAsset},
+    material::CustomMaterial,
     tabs::SystemTab,
     AssetRef, TabState,
 };
@@ -100,7 +105,7 @@ fn convert_component(
         Normal => Mesh::ATTRIBUTE_NORMAL,
         Tangent0 => Mesh::ATTRIBUTE_TANGENT,
         TexCoord0 => Mesh::ATTRIBUTE_UV_0,
-        // Color => Mesh::ATTRIBUTE_COLOR,
+        Color => Mesh::ATTRIBUTE_COLOR,
         // BoneIndices => Mesh::ATTRIBUTE_JOINT_INDEX,
         // BoneWeights => Mesh::ATTRIBUTE_JOINT_WEIGHT,
         _ => return None,
@@ -126,7 +131,7 @@ fn convert_component(
             })),
             _ => Unorm8x4(copy_direct(input, component)),
         },
-        Rgba8Uint => Uint8x4(copy_direct(input, component)),
+        Rgba8Uint => Uint16x4(copy_converting(input, component, |v: [u8; 4]| v.map(|n| n as u16))),
         Rgba8Snorm => Snorm8x4(copy_direct(input, component)),
         Rgba8Sint => Sint8x4(copy_direct(input, component)),
         Rg32Uint => Uint32x2(copy_direct(input, component)),
@@ -225,53 +230,92 @@ enum IndicesSlice<'a> {
 }
 
 #[derive(Component)]
-pub struct TemporaryTag;
+pub struct TemporaryLabel;
 
-fn sampler_descriptor_from_usage<'a>(usage: &STextureUsageInfo) -> SamplerDescriptor<'a> {
+fn texture_wrap(wrap: ETextureWrap) -> AddressMode {
+    match wrap {
+        ETextureWrap::ClampToEdge => AddressMode::ClampToEdge,
+        ETextureWrap::Repeat => AddressMode::Repeat,
+        ETextureWrap::MirroredRepeat => AddressMode::MirrorRepeat,
+        ETextureWrap::MirrorClamp => todo!("Mirror clamp"),
+        ETextureWrap::ClampToBorder => AddressMode::ClampToBorder,
+        ETextureWrap::Clamp => todo!("Clamp"),
+    }
+}
+
+fn sampler_descriptor_from_usage<'a>(
+    usage: &STextureUsageInfo,
+    data: Option<&STextureSamplerData>,
+) -> SamplerDescriptor<'a> {
     SamplerDescriptor {
         label: None,
         address_mode_u: match usage.wrap_x {
-            0 | u32::MAX => AddressMode::ClampToEdge,
+            0 => AddressMode::ClampToEdge,
             1 => AddressMode::Repeat,
             2 => AddressMode::MirrorRepeat,
             3 => todo!("Mirror clamp"),
             4 => AddressMode::ClampToBorder,
             5 => todo!("Clamp"),
+            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_x)),
             n => todo!("wrap {n}"),
         },
         address_mode_v: match usage.wrap_y {
-            0 | u32::MAX => AddressMode::ClampToEdge,
+            0 => AddressMode::ClampToEdge,
             1 => AddressMode::Repeat,
             2 => AddressMode::MirrorRepeat,
             3 => todo!("Mirror clamp"),
             4 => AddressMode::ClampToBorder,
             5 => todo!("Clamp"),
+            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_y)),
             n => todo!("wrap {n}"),
         },
         address_mode_w: match usage.wrap_z {
-            0 | u32::MAX => AddressMode::ClampToEdge,
+            0 => AddressMode::ClampToEdge,
             1 => AddressMode::Repeat,
             2 => AddressMode::MirrorRepeat,
             3 => todo!("Mirror clamp"),
             4 => AddressMode::ClampToBorder,
             5 => todo!("Clamp"),
+            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_z)),
             n => todo!("wrap {n}"),
         },
         mag_filter: match usage.filter {
-            0 | u32::MAX => FilterMode::Nearest,
+            0 => FilterMode::Nearest,
             1 => FilterMode::Linear,
+            u32::MAX => data.map_or(FilterMode::Nearest, |d| match d.filter {
+                ETextureFilter::Nearest => FilterMode::Nearest,
+                ETextureFilter::Linear => FilterMode::Linear,
+            }),
             n => todo!("Filter {n}"),
         },
         min_filter: match usage.filter {
-            0 | u32::MAX => FilterMode::Nearest,
+            0 => FilterMode::Nearest,
             1 => FilterMode::Linear,
+            u32::MAX => data.map_or(FilterMode::Nearest, |d| match d.filter {
+                ETextureFilter::Nearest => FilterMode::Nearest,
+                ETextureFilter::Linear => FilterMode::Linear,
+            }),
             n => todo!("Filter {n}"),
         },
-        mipmap_filter: FilterMode::Linear, // TODO?
+        mipmap_filter: data.map_or(FilterMode::Nearest, |d| match d.mip_filter {
+            ETextureMipFilter::Nearest => FilterMode::Nearest,
+            ETextureMipFilter::Linear => FilterMode::Linear,
+        }),
         lod_min_clamp: 0.0,
-        lod_max_clamp: 0.0,
+        lod_max_clamp: f32::MAX,
         compare: None,
-        anisotropy_clamp: None,
+        anisotropy_clamp: NonZeroU8::new(
+            data.map(|d| match d.aniso {
+                ETextureAnisotropicRatio::None => 0,
+                ETextureAnisotropicRatio::_1 => 1,
+                ETextureAnisotropicRatio::_2 => 2,
+                ETextureAnisotropicRatio::_4 => 4,
+                ETextureAnisotropicRatio::_8 => 8,
+                ETextureAnisotropicRatio::_16 => 16,
+            })
+            .unwrap_or_default(),
+        ),
+        // anisotropy_clamp: NonZeroU8::new(8),
         border_color: None,
     }
 }
@@ -280,7 +324,7 @@ impl SystemTab for ModelTab {
     type LoadParam = (
         SCommands,
         SResMut<Assets<Mesh>>,
-        SResMut<Assets<StandardMaterial>>,
+        SResMut<Assets<CustomMaterial>>,
         SResMut<Assets<ModelAsset>>,
         SResMut<Assets<TextureAsset>>,
         SResMut<Assets<Image>>,
@@ -327,15 +371,27 @@ impl SystemTab for ModelTab {
                 match &data.data {
                     CMaterialDataInner::Texture(texture) => {
                         if let Some(usage) = &texture.usage {
-                            sampler_descriptors
-                                .insert(texture.id, sampler_descriptor_from_usage(usage));
+                            let sampler_data = textures
+                                .get(&texture.id)
+                                .and_then(|handle| texture_assets.get(handle))
+                                .map(|txtr| &txtr.inner.head.sampler_data);
+                            sampler_descriptors.insert(
+                                texture.id,
+                                sampler_descriptor_from_usage(usage, sampler_data),
+                            );
                         }
                     }
-                    CMaterialDataInner::LayeredTexture(textures) => {
-                        for texture in &textures.textures {
+                    CMaterialDataInner::LayeredTexture(layers) => {
+                        for texture in &layers.textures {
                             if let Some(usage) = &texture.usage {
-                                sampler_descriptors
-                                    .insert(texture.id, sampler_descriptor_from_usage(usage));
+                                let sampler_data = textures
+                                    .get(&texture.id)
+                                    .and_then(|handle| texture_assets.get(handle))
+                                    .map(|txtr| &txtr.inner.head.sampler_data);
+                                sampler_descriptors.insert(
+                                    texture.id,
+                                    sampler_descriptor_from_usage(usage, sampler_data),
+                                );
                             }
                         }
                     }
@@ -494,18 +550,57 @@ impl SystemTab for ModelTab {
         // Build materials
         let mut material_handles = Vec::with_capacity(mtrl.materials.len());
         for mat in &mtrl.materials {
-            let mut out_mat = StandardMaterial::default();
+            let mut out_mat = CustomMaterial::default();
             println!("Shader {}, unk {}", mat.shader_id, mat.unk_guid);
             let _ = server.load_untyped(format!("{}.MTRL", mat.shader_id));
             for data in &mat.data {
                 match data.data_id {
                     EMaterialDataId::DIFT | EMaterialDataId::BCLR => match &data.data {
                         CMaterialDataInner::Texture(texture) => {
-                            out_mat.base_color_texture = texture_handles.get(&texture.id).cloned();
+                            out_mat.base_color_l0 = Color::WHITE;
+                            out_mat.base_color_texture_0 =
+                                texture_handles.get(&texture.id).cloned();
+                            out_mat.base_color_uv_0 =
+                                texture.usage.as_ref().map(|u| u.flags).unwrap_or_default();
                         }
                         _ => {
                             log::warn!(
                                 "Unsupported material data type for DIFT {:?}",
+                                data.data_type
+                            );
+                        }
+                    },
+                    EMaterialDataId::BCRL => match &data.data {
+                        CMaterialDataInner::LayeredTexture(layers) => {
+                            // println!("CREATING BCRL!!!");
+                            out_mat.base_color_l0 = layers.base.colors[0].to_array().into();
+                            out_mat.base_color_l1 = layers.base.colors[1].to_array().into();
+                            out_mat.base_color_l2 = layers.base.colors[2].to_array().into();
+                            out_mat.base_color_texture_0 =
+                                texture_handles.get(&layers.textures[0].id).cloned();
+                            out_mat.base_color_texture_1 =
+                                texture_handles.get(&layers.textures[1].id).cloned();
+                            out_mat.base_color_texture_2 =
+                                texture_handles.get(&layers.textures[2].id).cloned();
+                            out_mat.base_color_uv_0 = layers.textures[0]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                            out_mat.base_color_uv_1 = layers.textures[1]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                            out_mat.base_color_uv_2 = layers.textures[2]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                        }
+                        _ => {
+                            log::warn!(
+                                "Unsupported material data type for BCRL {:?}",
                                 data.data_type
                             );
                         }
@@ -520,8 +615,10 @@ impl SystemTab for ModelTab {
                         ),
                     },
                     EMaterialDataId::ICAN => match &data.data {
-                        CMaterialDataInner::Texture(_texture) => {
-                            // out_mat.emissive_texture = texture_handles.get(&texture.id).cloned();
+                        CMaterialDataInner::Texture(texture) => {
+                            out_mat.emissive_texture = texture_handles.get(&texture.id).cloned();
+                            out_mat.emissive_uv =
+                                texture.usage.as_ref().map(|u| u.flags).unwrap_or_default();
                         }
                         _ => log::warn!(
                             "Unsupported material data type for ICAN {:?}",
@@ -529,13 +626,112 @@ impl SystemTab for ModelTab {
                         ),
                     },
                     EMaterialDataId::ICNC => match &data.data {
-                        CMaterialDataInner::Color(_color) => {
-                            // out_mat.emissive = Color::rgba(color.r, color.g, color.b, color.a);
+                        CMaterialDataInner::Color(color) => {
+                            out_mat.emissive_color =
+                                Color::rgba(color.r, color.g, color.b, color.a);
                         }
                         _ => log::warn!(
                             "Unsupported material data type for ICNC {:?}",
                             data.data_type
                         ),
+                    },
+                    EMaterialDataId::NMAP => match &data.data {
+                        CMaterialDataInner::Texture(texture) => {
+                            out_mat.normal_map_l0 = Color::WHITE;
+                            out_mat.normal_map_texture_0 =
+                                texture_handles.get(&texture.id).cloned();
+                            out_mat.normal_map_uv_0 = texture.usage.as_ref().unwrap().flags;
+                        }
+                        _ => {
+                            log::warn!(
+                                "Unsupported material data type for NMAP {:?}",
+                                data.data_type
+                            );
+                        }
+                    },
+                    EMaterialDataId::NRML => match &data.data {
+                        CMaterialDataInner::LayeredTexture(layers) => {
+                            // println!("CREATING NRML!!!");
+                            out_mat.normal_map_l0 = layers.base.colors[0].to_array().into();
+                            out_mat.normal_map_l1 = layers.base.colors[1].to_array().into();
+                            out_mat.normal_map_l2 = layers.base.colors[2].to_array().into();
+                            out_mat.normal_map_texture_0 =
+                                texture_handles.get(&layers.textures[0].id).cloned();
+                            out_mat.normal_map_texture_1 =
+                                texture_handles.get(&layers.textures[1].id).cloned();
+                            out_mat.normal_map_texture_2 =
+                                texture_handles.get(&layers.textures[2].id).cloned();
+                            out_mat.normal_map_uv_0 = layers.textures[0]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                            out_mat.normal_map_uv_1 = layers.textures[1]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                            out_mat.normal_map_uv_2 = layers.textures[2]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                        }
+                        _ => {
+                            log::warn!(
+                                "Unsupported material data type for NRML {:?}",
+                                data.data_type
+                            );
+                        }
+                    },
+                    EMaterialDataId::METL => match &data.data {
+                        CMaterialDataInner::Texture(texture) => {
+                            out_mat.metallic_map_l0 = Color::WHITE;
+                            out_mat.metallic_map_texture_0 =
+                                texture_handles.get(&texture.id).cloned();
+                            out_mat.metallic_map_uv_0 = texture.usage.as_ref().unwrap().flags;
+                        }
+                        _ => {
+                            log::warn!(
+                                "Unsupported material data type for METL {:?}",
+                                data.data_type
+                            );
+                        }
+                    },
+                    EMaterialDataId::MTLL => match &data.data {
+                        CMaterialDataInner::LayeredTexture(layers) => {
+                            // println!("CREATING MTLL!!!");
+                            out_mat.metallic_map_l0 = layers.base.colors[0].to_array().into();
+                            out_mat.metallic_map_l1 = layers.base.colors[1].to_array().into();
+                            out_mat.metallic_map_l2 = layers.base.colors[2].to_array().into();
+                            out_mat.metallic_map_texture_0 =
+                                texture_handles.get(&layers.textures[0].id).cloned();
+                            out_mat.metallic_map_texture_1 =
+                                texture_handles.get(&layers.textures[1].id).cloned();
+                            out_mat.metallic_map_texture_2 =
+                                texture_handles.get(&layers.textures[2].id).cloned();
+                            out_mat.metallic_map_uv_0 = layers.textures[0]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                            out_mat.metallic_map_uv_1 = layers.textures[1]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                            out_mat.metallic_map_uv_2 = layers.textures[2]
+                                .usage
+                                .as_ref()
+                                .map(|u| u.flags)
+                                .unwrap_or_default();
+                        }
+                        _ => {
+                            log::warn!(
+                                "Unsupported material data type for MTLL {:?}",
+                                data.data_type
+                            );
+                        }
                     },
                     id => {
                         log::warn!("Unsupported material data ID {id:?}");
@@ -574,7 +770,7 @@ impl SystemTab for ModelTab {
             }
             entities.push((
                 commands
-                    .spawn(PbrBundle {
+                    .spawn(MaterialMeshBundle {
                         mesh: meshes.add(out_mesh),
                         material: material_handles[in_mesh.material_idx as usize].clone(),
                         transform: Transform::from_translation((-aabb.center).into()),
@@ -712,13 +908,19 @@ impl SystemTab for ModelTab {
                     camera: Camera {
                         viewport: Some(viewport),
                         priority: state.render_layer as isize,
+                        // TOOD bevy 0.10
+                        // hdr: true,
                         ..default()
                     },
+                    // TOOD bevy 0.10
+                    // tonemapping: Tonemapping::TonyMcMapFace,
                     transform: loaded.camera_xf,
                     ..default()
                 },
+                // TOOD bevy 0.10
+                // BloomSettings::default(),
                 RenderLayers::layer(state.render_layer),
-                TemporaryTag,
+                TemporaryLabel,
             ));
             commands.spawn((
                 DirectionalLightBundle {
@@ -728,7 +930,7 @@ impl SystemTab for ModelTab {
                     ..default()
                 },
                 RenderLayers::layer(state.render_layer),
-                TemporaryTag,
+                TemporaryLabel,
             ));
 
             egui::Frame::group(ui.style()).show(ui, |ui| {

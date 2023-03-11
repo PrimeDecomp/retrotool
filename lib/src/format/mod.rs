@@ -62,7 +62,7 @@ impl PartialEq<[u8; 4]> for FourCC {
 pub fn peek_four_cc(data: &[u8]) -> FourCC { FourCC(*array_ref!(data, 0, 4)) }
 
 #[binrw]
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct CVector3f {
     pub x: f32,
     pub y: f32,
@@ -70,7 +70,7 @@ pub struct CVector3f {
 }
 
 #[binrw]
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct CColor4f {
     pub r: f32,
     pub g: f32,
@@ -78,8 +78,16 @@ pub struct CColor4f {
     pub a: f32,
 }
 
+impl CColor4f {
+    #[inline]
+    pub fn to_array(self) -> [f32; 4] { [self.r, self.g, self.b, self.a] }
+}
+impl From<CColor4f> for [f32; 4] {
+    fn from(value: CColor4f) -> Self { value.to_array() }
+}
+
 #[binrw]
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct CVector4i {
     pub x: i32,
     pub y: i32,
