@@ -48,6 +48,8 @@ pub struct LoadedModel {
     pub radius: f32,
     pub origin: Vec3,
     pub projection: Projection,
+    pub diffuse_map: Handle<Image>,
+    pub specular_map: Handle<Image>,
 }
 
 pub struct ModelTab {
@@ -793,6 +795,8 @@ impl SystemTab for ModelTab {
             radius,
             origin: Vec3::ZERO,
             projection: Projection::Perspective(default()),
+            diffuse_map: server.load("papermill_diffuse_rgb9e5_zstd.ktx2"),
+            specular_map: server.load("papermill_specular_rgb9e5_zstd.ktx2"),
         });
     }
 
@@ -917,21 +921,25 @@ impl SystemTab for ModelTab {
                     ..default()
                 },
                 // BloomSettings::default(),
+                EnvironmentMapLight {
+                    diffuse_map: loaded.diffuse_map.clone(),
+                    specular_map: loaded.specular_map.clone(),
+                },
                 RenderLayers::layer(state.render_layer),
                 TemporaryLabel,
             ));
             // FIXME: https://github.com/bevyengine/bevy/issues/3462
             if state.render_layer == 0 {
-                commands.spawn((
-                    DirectionalLightBundle {
-                        directional_light: DirectionalLight { ..default() },
-                        transform: Transform::from_xyz(-30.0, 5.0, 20.0)
-                            .looking_at(Vec3::ZERO, Vec3::Y),
-                        ..default()
-                    },
-                    RenderLayers::layer(state.render_layer),
-                    TemporaryLabel,
-                ));
+                // commands.spawn((
+                //     DirectionalLightBundle {
+                //         directional_light: DirectionalLight { ..default() },
+                //         transform: Transform::from_xyz(-30.0, 5.0, 20.0)
+                //             .looking_at(Vec3::ZERO, Vec3::Y),
+                //         ..default()
+                //     },
+                //     RenderLayers::layer(state.render_layer),
+                //     TemporaryLabel,
+                // ));
             }
 
             egui::Frame::group(ui.style()).show(ui, |ui| {

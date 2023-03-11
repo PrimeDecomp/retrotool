@@ -43,7 +43,7 @@ fn main() {
             },
             ..Default::default()
         })
-        .insert_resource(AmbientLight { color: Color::rgb(1.0, 1.0, 1.0), brightness: 0.1 })
+        // .insert_resource(AmbientLight { color: Color::rgb(1.0, 1.0, 1.0), brightness: 0.1 })
         .insert_resource(file_open)
         .init_resource::<UiState>()
         .init_resource::<Packages>()
