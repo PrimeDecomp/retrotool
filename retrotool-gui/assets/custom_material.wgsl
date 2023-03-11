@@ -315,7 +315,7 @@ fn apply_normal_mapping(
     Nt = vec3<f32>(Nt.rg * 2.0 - 1.0, 0.0);
     Nt.z = sqrt(1.0 - Nt.x * Nt.x - Nt.y * Nt.y);
     // Normal maps authored for DirectX require flipping the y component
-    Nt.y = -Nt.y;
+    // Nt.y = -Nt.y;
     // NOTE: The mikktspace method of normal mapping applies maps the tangent-space normal from
     // the normal map texture in this way to be an EXACT inverse of how the normal map baker
     // calculates the normal maps so there is no error introduced. Do not change this code
