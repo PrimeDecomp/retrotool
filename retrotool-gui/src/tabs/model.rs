@@ -817,9 +817,10 @@ impl SystemTab for ModelTab {
         query: SystemParamItem<'_, '_, Self::UiParam>,
         state: &mut TabState,
     ) {
+        let scale = ui.ctx().pixels_per_point();
         let rect = ui.available_rect_before_wrap();
-        let left_top = rect.left_top();
-        let size = rect.size();
+        let left_top = rect.left_top().to_vec2() * scale;
+        let size = rect.size() * scale;
         let viewport = Viewport {
             physical_position: UVec2 { x: left_top.x as u32, y: left_top.y as u32 },
             physical_size: UVec2 { x: size.x as u32, y: size.y as u32 },
