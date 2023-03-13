@@ -97,7 +97,9 @@ struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         let mut tree = egui_dock::Tree::new(vec![TabType::Empty]);
-        tree.split_left(egui_dock::NodeIndex::root(), 0.25, vec![TabType::Project(ProjectTab)]);
+        tree.split_left(egui_dock::NodeIndex::root(), 0.25, vec![TabType::Project(
+            ProjectTab::default(),
+        )]);
         Self {
             tree,
             ui_font: FontId { size: 13.0, family: FontFamily::Proportional },
