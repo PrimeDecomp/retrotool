@@ -12,6 +12,7 @@ panic = "abort"
 strip = "debuginfo"
 
 [profile.dev.package]
+astc-decode = { opt-level = 3 }
 bevy = { opt-level = 3 }
 egui = { opt-level = 3 }
 naga = { opt-level = 3 }

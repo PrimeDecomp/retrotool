@@ -16,14 +16,14 @@ pub fn write_dds<W: Write>(w: &mut W, head: &STextureHeader, data: Vec<u8>) -> R
         caps2: None,
         is_cubemap: matches!(head.kind, ETextureType::Cube | ETextureType::CubeArray),
         resource_dimension: match head.kind {
-            ETextureType::_1D | ETextureType::_1DArray => D3D10ResourceDimension::Texture1D,
-            ETextureType::_2D
-            | ETextureType::_2DArray
-            | ETextureType::_2DMultisample
-            | ETextureType::_2DMultisampleArray
+            ETextureType::D1 | ETextureType::D1Array => D3D10ResourceDimension::Texture1D,
+            ETextureType::D2
+            | ETextureType::D2Array
+            | ETextureType::D2Multisample
+            | ETextureType::D2MultisampleArray
             | ETextureType::Cube
             | ETextureType::CubeArray => D3D10ResourceDimension::Texture2D,
-            ETextureType::_3D => D3D10ResourceDimension::Texture3D,
+            ETextureType::D3 => D3D10ResourceDimension::Texture3D,
         },
         alpha_mode: AlphaMode::Unknown,
     })?;

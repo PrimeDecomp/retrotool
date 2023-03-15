@@ -74,7 +74,7 @@ pub struct SModelMetaData {
 #[brw(repr(u32))]
 #[derive(Copy, Clone, Debug)]
 pub enum EBufferType {
-    U8 = 0, // ?
+    U8 = 0, // unused, assumed
     U16 = 1,
     U32 = 2,
 }
@@ -105,7 +105,7 @@ pub struct SVertexBufferInfo {
     pub component_count: u32,
     #[br(count = component_count)]
     pub components: Vec<SVertexDataComponent>,
-    pub unk: u8,
+    pub num_buffers: u8, // correct?
 }
 
 #[binrw]
@@ -273,11 +273,48 @@ pub enum EVertexComponent {
 
 #[binrw]
 #[derive(Clone, Debug)]
+// name?
+pub struct SLodInfoInner {
+    pub offset: u32,
+    pub count: u32,
+}
+
+#[binrw]
+#[derive(Clone, Debug)]
+// name?
+pub struct SLodInfoOuter {
+    pub inner: [SLodInfoInner; 5],
+}
+
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct SRenderModelLODRule {
+    pub value: f32,
+}
+
+#[binrw]
+#[derive(Clone, Debug)]
 pub struct SMeshLoadInformation {
     #[bw(try_calc = meshes.len().try_into())]
     pub mesh_count: u32,
     #[br(count = mesh_count)]
     pub meshes: Vec<CRenderMesh>,
+    #[br(count = (mesh_count + 3) / 4)]
+    pub unk_data_1: Vec<u8>,
+    #[br(count = (mesh_count + 7) / 8)]
+    pub unk_data_2: Vec<u8>,
+    #[bw(try_calc = shorts.len().try_into())]
+    pub short_count: u32,
+    #[br(count = short_count)]
+    pub shorts: Vec<u16>,
+    // #[bw(try_calc = lod_info.len().try_into())]
+    pub lod_count: u8,
+    #[br(count = lod_count)]
+    pub lod_info: Vec<SLodInfoOuter>,
+    #[bw(calc = if lod_rules.is_empty() { 0 } else { 1 })]
+    pub has_lod_rules: u32,
+    #[br(if(has_lod_rules == 1), count(lod_count))]
+    pub lod_rules: Vec<SRenderModelLODRule>,
 }
 
 #[binrw]
@@ -292,12 +329,18 @@ pub struct CRenderMesh {
     pub unk_e: u16, // 64
 }
 
+// #[binrw]
+// #[derive(Clone, Debug)]
+// pub struct DataSourceLoader {
+// }
+
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct SModelHeader {
     pub unk: u32,
     pub bounds: CAABox,
-    // TODO
+    // pub data_source_count: u32,
+    // pub data_sources: Vec<DataSourceLoader>,
 }
 
 #[binrw]
@@ -413,7 +456,7 @@ pub struct CLayeredTextureData {
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct STextureUsageInfo {
-    pub flags: u32,
+    pub tex_coord: u32,
     pub filter: u32,
     pub wrap_x: u32,
     pub wrap_y: u32,

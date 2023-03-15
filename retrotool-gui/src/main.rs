@@ -18,8 +18,12 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::{
     loaders::{
-        package_loader_system, MaterialAssetLoader, ModelAssetLoader, PackageAssetLoader,
-        PackageDirectory, RetroAssetIoPlugin, TextureAssetLoader,
+        material::MaterialAssetLoader,
+        model::ModelAssetLoader,
+        package::{
+            package_loader_system, PackageAssetLoader, PackageDirectory, RetroAssetIoPlugin,
+        },
+        texture::TextureAssetLoader,
     },
     material::CustomMaterial,
     tabs::{load_tab, model::TemporaryLabel, project::ProjectTab, TabState, TabType, TabViewer},
@@ -81,7 +85,7 @@ fn main() {
         .run();
 }
 
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq)]
 pub struct AssetRef {
     id: Uuid,
     kind: FourCC,

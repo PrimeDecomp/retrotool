@@ -21,7 +21,7 @@ use retrolib::{
             EVertexComponent, EVertexDataFormat, ModelData,
         },
         foot::locate_meta,
-        txtr::{texture_to_image, TextureData},
+        txtr::{decompress_images, TextureData},
     },
     util::file::map_file,
 };
@@ -124,7 +124,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
     // Build buffer to component index
     let mut buf_infos: Vec<VertexBufferInfo> = Vec::with_capacity(vtx_buffers.len());
     for info in &vbuf.info {
-        let num_buffers = info.unk as usize; // guess
+        let num_buffers = info.num_buffers as usize;
         let mut infos =
             vec![
                 VertexBufferInfo { vertex_count: info.vertex_count, ..Default::default() };
@@ -248,7 +248,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
         HashMap<json::validation::Checked<json::mesh::Semantic>, json::Index<json::Accessor>>,
     > = Vec::new();
     for buf_info in &vbuf.info {
-        let num_buffers = buf_info.unk as usize; // guess?
+        let num_buffers = buf_info.num_buffers as usize;
         let mut attribute_map = HashMap::new();
         for idx in 0..num_buffers {
             let target_vtx_buf = cur_buf + idx;
@@ -530,11 +530,11 @@ fn convert(args: ConvertArgs) -> Result<()> {
             });
             // TODO: please clean up
             {
-                println!("Converting TXTR {}", texture.id);
+                log::info!("Converting TXTR {}", texture.id);
                 let txtr_file = map_file(in_dir.join(format!("{}.TXTR", texture.id)))?;
                 let meta = locate_meta(&txtr_file, Endian::Little)?;
                 let txtr = TextureData::slice(&txtr_file, meta, Endian::Little)?;
-                let image = texture_to_image(&txtr)?;
+                let image = &decompress_images(&txtr)?[0][0];
                 let mut f = File::create(out_dir.join(format!("{}.png", texture.id)))?;
                 let mut p = png::Encoder::new(&mut f, image.width(), image.height());
                 if txtr.head.format.is_srgb() {
@@ -569,7 +569,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
         };
         Ok(json::texture::Info {
             index: json::Index::new(texture_idx as u32),
-            tex_coord: usage.flags, // TODO is this right?
+            tex_coord: usage.tex_coord,
             extensions: None,
             extras: None,
         })

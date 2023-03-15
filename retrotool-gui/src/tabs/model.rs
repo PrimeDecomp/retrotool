@@ -9,17 +9,15 @@ use bevy::{
         camera::Viewport,
         mesh::*,
         primitives::Aabb,
-        render_resource::{
-            AddressMode, Extent3d, FilterMode, SamplerDescriptor, TextureDescriptor,
-            TextureDimension, TextureFormat, TextureUsages,
-        },
+        render_resource::{AddressMode, FilterMode, SamplerDescriptor},
         texture::ImageSampler,
         view::RenderLayers,
     },
     utils::HashMap,
 };
 use bevy_egui::EguiContext;
-use egui::{PointerButton, Sense};
+use bit_set::BitSet;
+use egui::{PointerButton, Sense, Widget};
 use half::f16;
 use retrolib::format::{
     cmdl::{
@@ -27,22 +25,35 @@ use retrolib::format::{
         ModelData, STextureUsageInfo, SVertexDataComponent,
     },
     txtr::{
-        ETextureAnisotropicRatio, ETextureFilter, ETextureFormat, ETextureMipFilter, ETextureType,
-        ETextureWrap, STextureSamplerData,
+        ETextureAnisotropicRatio, ETextureFilter, ETextureMipFilter, ETextureWrap,
+        STextureSamplerData,
     },
 };
 use uuid::Uuid;
 
 use crate::{
     icon,
-    loaders::{ModelAsset, TextureAsset},
+    loaders::{model::ModelAsset, texture::TextureAsset},
     material::CustomMaterial,
     tabs::SystemTab,
     AssetRef, TabState,
 };
 
+pub struct LoadedMesh {
+    entity: Entity,
+    material_name: String,
+    visible: bool,
+}
+
+pub struct ModelLod {
+    pub meshes: BitSet,
+    pub distance: Option<f32>,
+}
+
 pub struct LoadedModel {
-    pub entities: Vec<(Entity, bool)>,
+    pub meshes: Vec<LoadedMesh>,
+    pub lod: Vec<ModelLod>,
+    pub selected_lod: usize,
     pub camera_xf: Transform,
     pub upside_down: bool,
     pub radius: f32,
@@ -60,7 +71,6 @@ pub struct ModelTab {
 
 #[derive(Debug, Clone, Default)]
 struct VertexBufferInfo {
-    // pub vertex_count: u32,
     pub attributes: Vec<(MeshVertexAttribute, VertexAttributeValues)>,
 }
 
@@ -220,7 +230,7 @@ where T: num_traits::Num + num_traits::Bounded + Copy + PartialOrd + TryInto<usi
         }
     }
     let values =
-        if min == T::zero() { slice.to_vec() } else { slice.iter().map(|&v| v - min).collect() };
+        if min.is_zero() { slice.to_vec() } else { slice.iter().map(|&v| v - min).collect() };
     (values, min.try_into().unwrap_or(usize::MAX)..max.try_into().unwrap_or(usize::MAX) + 1)
 }
 
@@ -308,16 +318,31 @@ fn sampler_descriptor_from_usage<'a>(
         anisotropy_clamp: NonZeroU8::new(
             data.map(|d| match d.aniso {
                 ETextureAnisotropicRatio::None => 0,
-                ETextureAnisotropicRatio::_1 => 1,
-                ETextureAnisotropicRatio::_2 => 2,
-                ETextureAnisotropicRatio::_4 => 4,
-                ETextureAnisotropicRatio::_8 => 8,
-                ETextureAnisotropicRatio::_16 => 16,
+                ETextureAnisotropicRatio::Ratio1 => 1,
+                ETextureAnisotropicRatio::Ratio2 => 2,
+                ETextureAnisotropicRatio::Ratio4 => 4,
+                ETextureAnisotropicRatio::Ratio8 => 8,
+                ETextureAnisotropicRatio::Ratio16 => 16,
             })
             .unwrap_or_default(),
         ),
         // anisotropy_clamp: NonZeroU8::new(8),
         border_color: None,
+    }
+}
+
+impl ModelTab {
+    fn get_load_state(&self, server: &AssetServer, models: &Assets<ModelAsset>) -> LoadState {
+        match server.get_load_state(&self.handle) {
+            LoadState::Loaded => {}
+            state => return state,
+        };
+        let asset = match models.get(&self.handle) {
+            Some(v) => v,
+            None => return LoadState::Failed,
+        };
+        // Ensure all dependencies loaded
+        server.get_group_load_state(asset.textures.iter().map(|(_, h)| h.id()))
     }
 }
 
@@ -331,7 +356,7 @@ impl SystemTab for ModelTab {
         SResMut<Assets<Image>>,
         SResMut<AssetServer>,
     );
-    type UiParam = SCommands;
+    type UiParam = (SCommands, SRes<AssetServer>, SRes<Assets<ModelAsset>>);
 
     fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
         let (
@@ -344,8 +369,8 @@ impl SystemTab for ModelTab {
             server,
         ) = query;
         if let Some(loaded) = &self.loaded {
-            for (entity, _) in &loaded.entities {
-                if let Some(mut commands) = commands.get_entity(*entity) {
+            for mesh in &loaded.meshes {
+                if let Some(mut commands) = commands.get_entity(mesh.entity) {
                     commands.insert(Visibility::Hidden);
                 }
             }
@@ -404,123 +429,19 @@ impl SystemTab for ModelTab {
         // Build texture images
         let mut texture_handles = HashMap::<Uuid, Handle<Image>>::new();
         for (id, handle) in textures {
-            let txtr = texture_assets.get(handle).unwrap();
-            let image_handle = images.add(Image {
-                data: txtr
-                    .decompressed
-                    .as_ref()
-                    .map(|i| i.to_rgba8().into_raw())
-                    .unwrap_or_else(|| txtr.inner.data.clone()),
-                texture_descriptor: TextureDescriptor {
-                    label: None,
-                    size: Extent3d {
-                        width: txtr.inner.head.width,
-                        height: txtr.inner.head.height,
-                        depth_or_array_layers: if txtr.decompressed.is_some() {
-                            1 // FIXME
-                        } else {
-                            txtr.inner.head.layers
-                        },
-                    },
-                    mip_level_count: if txtr.decompressed.is_some() {
-                        1
-                    } else {
-                        txtr.inner.head.mip_sizes.len() as u32
-                    },
-                    sample_count: 1,
-                    dimension: match txtr.inner.head.kind {
-                        ETextureType::_1D => TextureDimension::D1,
-                        ETextureType::_2D => TextureDimension::D2,
-                        ETextureType::_3D => TextureDimension::D3,
-                        ETextureType::Cube => TextureDimension::D2,
-                        ETextureType::_1DArray => TextureDimension::D1,
-                        ETextureType::_2DArray => TextureDimension::D2,
-                        ETextureType::_2DMultisample => TextureDimension::D2,
-                        ETextureType::_2DMultisampleArray => TextureDimension::D2,
-                        ETextureType::CubeArray => TextureDimension::D2,
-                    },
-                    format: if txtr.decompressed.is_some() {
-                        if txtr.inner.head.format.is_srgb() {
-                            TextureFormat::Rgba8UnormSrgb
-                        } else {
-                            TextureFormat::Rgba8Unorm
-                        }
-                    } else {
-                        match txtr.inner.head.format {
-                            ETextureFormat::R8Unorm => TextureFormat::Rgba8Unorm,
-                            ETextureFormat::R8Snorm => TextureFormat::R8Snorm,
-                            ETextureFormat::R8Uint => TextureFormat::R8Uint,
-                            ETextureFormat::R8Sint => TextureFormat::R8Sint,
-                            ETextureFormat::R16Unorm => TextureFormat::R16Unorm,
-                            ETextureFormat::R16Snorm => TextureFormat::R16Snorm,
-                            ETextureFormat::R16Uint => TextureFormat::R16Uint,
-                            ETextureFormat::R16Sint => TextureFormat::R16Sint,
-                            ETextureFormat::R16Float => TextureFormat::R16Float,
-                            ETextureFormat::R32Uint => TextureFormat::R32Uint,
-                            ETextureFormat::R32Sint => TextureFormat::R32Sint,
-                            ETextureFormat::Rgba8Unorm => TextureFormat::Rgba8Unorm,
-                            ETextureFormat::Rgba8Srgb => TextureFormat::Rgba8UnormSrgb,
-                            ETextureFormat::Rgba16Float => TextureFormat::Rgba16Float,
-                            ETextureFormat::Rgba32Float => TextureFormat::Rgba32Float,
-                            ETextureFormat::Depth16Unorm => TextureFormat::Depth16Unorm,
-                            ETextureFormat::Depth16Unorm2 => TextureFormat::Depth16Unorm,
-                            ETextureFormat::Depth24S8Unorm => TextureFormat::Depth24PlusStencil8,
-                            ETextureFormat::Depth32Float => TextureFormat::Depth32Float,
-                            ETextureFormat::RgbaBc1Unorm => TextureFormat::Bc1RgbaUnorm,
-                            ETextureFormat::RgbaBc1Srgb => TextureFormat::Bc1RgbaUnormSrgb,
-                            ETextureFormat::RgbaBc2Unorm => TextureFormat::Bc2RgbaUnorm,
-                            ETextureFormat::RgbaBc2Srgb => TextureFormat::Bc2RgbaUnormSrgb,
-                            ETextureFormat::RgbaBc3Unorm => TextureFormat::Bc3RgbaUnorm,
-                            ETextureFormat::RgbaBc3Srgb => TextureFormat::Bc3RgbaUnormSrgb,
-                            ETextureFormat::RgbaBc4Unorm => TextureFormat::Bc4RUnorm,
-                            ETextureFormat::RgbaBc4Snorm => TextureFormat::Bc4RSnorm,
-                            ETextureFormat::RgbaBc5Unorm => TextureFormat::Bc5RgUnorm,
-                            ETextureFormat::RgbaBc5Snorm => TextureFormat::Bc5RgSnorm,
-                            ETextureFormat::Rg11B10Float => TextureFormat::Rg11b10Float,
-                            ETextureFormat::R32Float => TextureFormat::R32Float,
-                            ETextureFormat::Rg8Unorm => TextureFormat::Rg8Unorm,
-                            ETextureFormat::Rg8Snorm => TextureFormat::Rg8Snorm,
-                            ETextureFormat::Rg8Uint => TextureFormat::Rg8Uint,
-                            ETextureFormat::Rg8Sint => TextureFormat::Rg8Sint,
-                            ETextureFormat::Rg16Float => TextureFormat::Rg16Float,
-                            ETextureFormat::Rg16Unorm => TextureFormat::Rg16Unorm,
-                            ETextureFormat::Rg16Snorm => TextureFormat::Rg16Snorm,
-                            ETextureFormat::Rg16Uint => TextureFormat::Rg16Uint,
-                            ETextureFormat::Rg16Sint => TextureFormat::Rg16Sint,
-                            ETextureFormat::Rgb10A2Unorm => TextureFormat::Rgb10a2Unorm,
-                            ETextureFormat::Rg32Uint => TextureFormat::Rg32Uint,
-                            ETextureFormat::Rg32Sint => TextureFormat::Rg32Sint,
-                            ETextureFormat::Rg32Float => TextureFormat::Rg32Float,
-                            ETextureFormat::Rgba16Unorm => TextureFormat::Rgba16Unorm,
-                            ETextureFormat::Rgba16Snorm => TextureFormat::Rgba16Snorm,
-                            ETextureFormat::Rgba16Uint => TextureFormat::Rgba16Uint,
-                            ETextureFormat::Rgba16Sint => TextureFormat::Rgba16Sint,
-                            ETextureFormat::Rgba32Uint => TextureFormat::Rgba32Uint,
-                            ETextureFormat::Rgba32Sint => TextureFormat::Rgba32Sint,
-                            ETextureFormat::BptcUfloat => TextureFormat::Bc6hRgbUfloat,
-                            ETextureFormat::BptcSfloat => TextureFormat::Bc6hRgbSfloat,
-                            ETextureFormat::BptcUnorm => TextureFormat::Bc7RgbaUnorm,
-                            ETextureFormat::BptcUnormSrgb => TextureFormat::Bc7RgbaUnormSrgb,
-                            format => todo!("format {format:?}"),
-                        }
-                    },
-                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-                    view_formats: &[],
-                },
-                sampler_descriptor: sampler_descriptors
-                    .get(id)
-                    .map(|desc| ImageSampler::Descriptor(desc.clone()))
-                    .unwrap_or_default(),
-                texture_view_descriptor: None,
-            });
-            texture_handles.insert(*id, image_handle);
+            let asset = texture_assets.get(handle).unwrap();
+            let mut image = asset.texture.clone();
+            if let Some(desc) = sampler_descriptors.get(id) {
+                image.sampler_descriptor = ImageSampler::Descriptor(desc.clone());
+            }
+            texture_handles.insert(*id, images.add(image));
         }
 
         // Build vertex buffers
         let mut buf_infos: Vec<VertexBufferInfo> = Vec::with_capacity(vtx_buffers.len());
         let mut cur_buf = 0usize;
         for info in &vbuf.info {
-            let num_buffers = info.unk as usize; // guess
+            let num_buffers = info.num_buffers as usize;
             let mut attributes = Vec::with_capacity(info.components.len());
             for component in &info.components {
                 let input = &*vtx_buffers[cur_buf + component.buffer_index as usize];
@@ -528,10 +449,7 @@ impl SystemTab for ModelTab {
                     attributes.push((attribute, values));
                 }
             }
-            buf_infos.push(VertexBufferInfo {
-                // vertex_count: info.vertex_count,
-                attributes,
-            });
+            buf_infos.push(VertexBufferInfo { attributes });
             cur_buf += num_buffers;
         }
 
@@ -553,7 +471,7 @@ impl SystemTab for ModelTab {
         let mut material_handles = Vec::with_capacity(mtrl.materials.len());
         for mat in &mtrl.materials {
             let mut out_mat = CustomMaterial::default();
-            println!("Shader {}, unk {}", mat.shader_id, mat.unk_guid);
+            log::info!("Shader {}, unk {}", mat.shader_id, mat.unk_guid);
             let _ = server.load_untyped(format!("{}.MTRL", mat.shader_id));
             for data in &mat.data {
                 match data.data_id {
@@ -563,7 +481,7 @@ impl SystemTab for ModelTab {
                             out_mat.base_color_texture_0 =
                                 texture_handles.get(&texture.id).cloned();
                             out_mat.base_color_uv_0 =
-                                texture.usage.as_ref().map(|u| u.flags).unwrap_or_default();
+                                texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                         }
                         _ => {
                             log::warn!(
@@ -574,7 +492,6 @@ impl SystemTab for ModelTab {
                     },
                     EMaterialDataId::BCRL => match &data.data {
                         CMaterialDataInner::LayeredTexture(layers) => {
-                            // println!("CREATING BCRL!!!");
                             out_mat.base_color_l0 = layers.base.colors[0].to_array().into();
                             out_mat.base_color_l1 = layers.base.colors[1].to_array().into();
                             out_mat.base_color_l2 = layers.base.colors[2].to_array().into();
@@ -587,17 +504,17 @@ impl SystemTab for ModelTab {
                             out_mat.base_color_uv_0 = layers.textures[0]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                             out_mat.base_color_uv_1 = layers.textures[1]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                             out_mat.base_color_uv_2 = layers.textures[2]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                         }
                         _ => {
@@ -620,7 +537,7 @@ impl SystemTab for ModelTab {
                         CMaterialDataInner::Texture(texture) => {
                             out_mat.emissive_texture = texture_handles.get(&texture.id).cloned();
                             out_mat.emissive_uv =
-                                texture.usage.as_ref().map(|u| u.flags).unwrap_or_default();
+                                texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                         }
                         _ => log::warn!(
                             "Unsupported material data type for ICAN {:?}",
@@ -642,7 +559,7 @@ impl SystemTab for ModelTab {
                             out_mat.normal_map_l0 = Color::WHITE;
                             out_mat.normal_map_texture_0 =
                                 texture_handles.get(&texture.id).cloned();
-                            out_mat.normal_map_uv_0 = texture.usage.as_ref().unwrap().flags;
+                            out_mat.normal_map_uv_0 = texture.usage.as_ref().unwrap().tex_coord;
                         }
                         _ => {
                             log::warn!(
@@ -653,7 +570,6 @@ impl SystemTab for ModelTab {
                     },
                     EMaterialDataId::NRML => match &data.data {
                         CMaterialDataInner::LayeredTexture(layers) => {
-                            // println!("CREATING NRML!!!");
                             out_mat.normal_map_l0 = layers.base.colors[0].to_array().into();
                             out_mat.normal_map_l1 = layers.base.colors[1].to_array().into();
                             out_mat.normal_map_l2 = layers.base.colors[2].to_array().into();
@@ -666,17 +582,17 @@ impl SystemTab for ModelTab {
                             out_mat.normal_map_uv_0 = layers.textures[0]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                             out_mat.normal_map_uv_1 = layers.textures[1]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                             out_mat.normal_map_uv_2 = layers.textures[2]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                         }
                         _ => {
@@ -691,7 +607,7 @@ impl SystemTab for ModelTab {
                             out_mat.metallic_map_l0 = Color::WHITE;
                             out_mat.metallic_map_texture_0 =
                                 texture_handles.get(&texture.id).cloned();
-                            out_mat.metallic_map_uv_0 = texture.usage.as_ref().unwrap().flags;
+                            out_mat.metallic_map_uv_0 = texture.usage.as_ref().unwrap().tex_coord;
                         }
                         _ => {
                             log::warn!(
@@ -702,7 +618,6 @@ impl SystemTab for ModelTab {
                     },
                     EMaterialDataId::MTLL => match &data.data {
                         CMaterialDataInner::LayeredTexture(layers) => {
-                            // println!("CREATING MTLL!!!");
                             out_mat.metallic_map_l0 = layers.base.colors[0].to_array().into();
                             out_mat.metallic_map_l1 = layers.base.colors[1].to_array().into();
                             out_mat.metallic_map_l2 = layers.base.colors[2].to_array().into();
@@ -715,17 +630,17 @@ impl SystemTab for ModelTab {
                             out_mat.metallic_map_uv_0 = layers.textures[0]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                             out_mat.metallic_map_uv_1 = layers.textures[1]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                             out_mat.metallic_map_uv_2 = layers.textures[2]
                                 .usage
                                 .as_ref()
-                                .map(|u| u.flags)
+                                .map(|u| u.tex_coord)
                                 .unwrap_or_default();
                         }
                         _ => {
@@ -748,7 +663,7 @@ impl SystemTab for ModelTab {
             Vec3::new(head.bounds.min.x, head.bounds.min.y, head.bounds.min.z),
             Vec3::new(head.bounds.max.x, head.bounds.max.y, head.bounds.max.z),
         );
-        let mut entities = vec![];
+        let mut out_meshes = vec![];
         for (_idx, in_mesh) in mesh.meshes.iter().enumerate() {
             let (indices, vert_range) = match &index_buffers[in_mesh.idx_buf_idx as usize] {
                 IndicesSlice::U16(indices) => {
@@ -770,8 +685,8 @@ impl SystemTab for ModelTab {
                     slice_vertices(values, vert_range.clone()),
                 );
             }
-            entities.push((
-                commands
+            out_meshes.push(LoadedMesh {
+                entity: commands
                     .spawn(MaterialMeshBundle {
                         mesh: meshes.add(out_mesh),
                         material: material_handles[in_mesh.material_idx as usize].clone(),
@@ -779,8 +694,24 @@ impl SystemTab for ModelTab {
                         ..default()
                     })
                     .id(),
-                true,
-            ));
+                material_name: mtrl.materials[in_mesh.material_idx as usize].name.clone(),
+                visible: true,
+            });
+        }
+
+        let mut lod = Vec::with_capacity(mesh.lod_count as usize);
+        for (idx, outer) in mesh.lod_info.iter().enumerate() {
+            let mut visible = BitSet::with_capacity(mesh.meshes.len());
+            for inner in &outer.inner {
+                for &idx in &mesh.shorts[inner.offset as usize..(inner.offset + inner.count) as usize]
+                {
+                    visible.insert(idx as usize);
+                }
+            }
+            lod.push(ModelLod {
+                meshes: visible,
+                distance: mesh.lod_rules.get(idx).map(|r| r.value),
+            });
         }
 
         let radius = (aabb.max() - aabb.min()).max_element() * 1.25;
@@ -789,7 +720,9 @@ impl SystemTab for ModelTab {
         let rot_matrix = Mat3::from_quat(camera_xf.rotation);
         camera_xf.translation = rot_matrix.mul_vec3(Vec3::new(0.0, 0.0, radius));
         self.loaded = Some(LoadedModel {
-            entities,
+            meshes: out_meshes,
+            lod,
+            selected_lod: 0,
             camera_xf,
             upside_down: false,
             radius,
@@ -803,8 +736,8 @@ impl SystemTab for ModelTab {
     fn close(&mut self, query: SystemParamItem<'_, '_, Self::LoadParam>) {
         let (mut commands, _, _, _, _, _, _) = query;
         if let Some(loaded) = &self.loaded {
-            for (entity, _) in &loaded.entities {
-                if let Some(mut commands) = commands.get_entity(*entity) {
+            for mesh in &loaded.meshes {
+                if let Some(mut commands) = commands.get_entity(mesh.entity) {
                     commands.despawn();
                 }
             }
@@ -830,7 +763,7 @@ impl SystemTab for ModelTab {
         let response =
             ui.interact(rect, ui.make_persistent_id("background"), Sense::click_and_drag());
 
-        let mut commands = query;
+        let (mut commands, server, models) = query;
         if let Some(loaded) = &mut self.loaded {
             let mut transform = &mut loaded.camera_xf;
             let mut any = false;
@@ -945,11 +878,23 @@ impl SystemTab for ModelTab {
 
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(rect.height() * 0.25).show(ui, |ui| {
-                    for (idx, (entity, visible)) in loaded.entities.iter_mut().enumerate() {
-                        ui.checkbox(visible, format!("Mesh {idx}"));
-                        if let Some(mut commands) = commands.get_entity(*entity) {
+                    if loaded.lod.len() > 1 {
+                        egui::Slider::new(&mut loaded.selected_lod, 0..=loaded.lod.len() - 1)
+                            .text("LOD")
+                            .ui(ui);
+                        if let Some(value) = loaded.lod[loaded.selected_lod].distance {
+                            ui.label(format!("Distance: {value}"));
+                        }
+                    }
+                    for idx in loaded.lod[loaded.selected_lod].meshes.iter() {
+                        let mesh = &mut loaded.meshes[idx];
+                        ui.checkbox(
+                            &mut mesh.visible,
+                            format!("Mesh {idx} ({})", mesh.material_name),
+                        );
+                        if let Some(mut commands) = commands.get_entity(mesh.entity) {
                             commands.insert((
-                                if *visible { Visibility::Visible } else { Visibility::Hidden },
+                                if mesh.visible { Visibility::Visible } else { Visibility::Hidden },
                                 RenderLayers::layer(state.render_layer),
                             ));
                         }
@@ -957,6 +902,16 @@ impl SystemTab for ModelTab {
                 });
             });
             state.render_layer += 1;
+        } else {
+            ui.centered_and_justified(|ui| {
+                match self.get_load_state(&server, &models) {
+                    LoadState::Failed => egui::Label::new(
+                        egui::RichText::from("Loading failed").heading().color(egui::Color32::RED),
+                    )
+                    .ui(ui),
+                    _ => egui::Spinner::new().size(50.0).ui(ui),
+                };
+            });
         }
     }
 

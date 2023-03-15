@@ -1,4 +1,9 @@
-use std::{io::Cursor, num::NonZeroUsize};
+use std::{
+    cmp::max,
+    fmt::{Display, Formatter},
+    io::Cursor,
+    num::NonZeroUsize,
+};
 
 use anyhow::{anyhow, bail, ensure, Result};
 use binrw::{binrw, BinReaderExt, Endian};
@@ -32,15 +37,31 @@ pub const K_CHUNK_GPU: FourCC = FourCC(*b"GPU ");
 #[brw(repr(u32))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureType {
-    _1D = 0,
-    _2D = 1,
-    _3D = 2,
+    D1 = 0,
+    D2 = 1,
+    D3 = 2,
     Cube = 3,
-    _1DArray = 4,
-    _2DArray = 5,
-    _2DMultisample = 6,
-    _2DMultisampleArray = 7,
+    D1Array = 4,
+    D2Array = 5,
+    D2Multisample = 6,
+    D2MultisampleArray = 7,
     CubeArray = 8,
+}
+
+impl Display for ETextureType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ETextureType::D1 => "1D",
+            ETextureType::D2 => "2D",
+            ETextureType::D3 => "3D",
+            ETextureType::Cube => "Cube",
+            ETextureType::D1Array => "1D Array",
+            ETextureType::D2Array => "2D Array",
+            ETextureType::D2Multisample => "2D Multisample",
+            ETextureType::D2MultisampleArray => "2D Multisample Array",
+            ETextureType::CubeArray => "Cube Array",
+        })
+    }
 }
 
 #[binrw]
@@ -80,11 +101,11 @@ pub enum ETextureMipFilter {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ETextureAnisotropicRatio {
     None = u8::MAX,
-    _1 = 0,
-    _2 = 1,
-    _4 = 2,
-    _8 = 3,
-    _16 = 4,
+    Ratio1 = 0,
+    Ratio2 = 1,
+    Ratio4 = 2,
+    Ratio8 = 3,
+    Ratio16 = 4,
 }
 
 #[binrw]
@@ -243,6 +264,97 @@ pub enum ETextureFormat {
     BptcSfloat = 82,
     BptcUnorm = 83,
     BptcUnormSrgb = 84,
+}
+
+impl Display for ETextureFormat {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ETextureFormat::R8Unorm => "R8 UNORM",
+            ETextureFormat::R8Snorm => "R8 SNORM",
+            ETextureFormat::R8Uint => "R8 UINT",
+            ETextureFormat::R8Sint => "R8 SINT",
+            ETextureFormat::R16Unorm => "R16 UNORM",
+            ETextureFormat::R16Snorm => "R16 SNORM",
+            ETextureFormat::R16Uint => "R16 UINT",
+            ETextureFormat::R16Sint => "R16 SINT",
+            ETextureFormat::R16Float => "R16 FLOAT",
+            ETextureFormat::R32Uint => "R32 UINT",
+            ETextureFormat::R32Sint => "R32 SINT",
+            ETextureFormat::Rgb8Unorm => "RGB8 UNORM",
+            ETextureFormat::Rgba8Unorm => "RGBA8 UNORM",
+            ETextureFormat::Rgba8Srgb => "RGBA8 UNORM (sRGB)",
+            ETextureFormat::Rgba16Float => "RGBA16 FLOAT",
+            ETextureFormat::Rgba32Float => "RGBA32 FLOAT",
+            ETextureFormat::Depth16Unorm | ETextureFormat::Depth16Unorm2 => "D16 UNORM",
+            ETextureFormat::Depth24S8Unorm => "D24S8 UNORM",
+            ETextureFormat::Depth32Float => "D32 FLOAT",
+            ETextureFormat::RgbaBc1Unorm => "BC1 UNORM",
+            ETextureFormat::RgbaBc1Srgb => "BC1 UNORM (sRGB)",
+            ETextureFormat::RgbaBc2Unorm => "BC2 UNORM",
+            ETextureFormat::RgbaBc2Srgb => "BC2 UNORM (sRGB)",
+            ETextureFormat::RgbaBc3Unorm => "BC3 UNORM",
+            ETextureFormat::RgbaBc3Srgb => "BC3 UNORM (sRGB)",
+            ETextureFormat::RgbaBc4Unorm => "BC4 UNORM",
+            ETextureFormat::RgbaBc4Snorm => "BC4 SNORM",
+            ETextureFormat::RgbaBc5Unorm => "BC5 UNORM",
+            ETextureFormat::RgbaBc5Snorm => "BC5 SNORM",
+            ETextureFormat::Rg11B10Float => "RG11B10 FLOAT",
+            ETextureFormat::R32Float => "R32 FLOAT",
+            ETextureFormat::Rg8Unorm => "RG8 UNORM",
+            ETextureFormat::Rg8Snorm => "RG8 SNORM",
+            ETextureFormat::Rg8Uint => "RG8 UINT",
+            ETextureFormat::Rg8Sint => "RG16 SINT",
+            ETextureFormat::Rg16Float => "RG16 FLOAT",
+            ETextureFormat::Rg16Unorm => "RG16 UNORM",
+            ETextureFormat::Rg16Snorm => "RG16 SNORM",
+            ETextureFormat::Rg16Uint => "RG16 UINT",
+            ETextureFormat::Rg16Sint => "RG16 SINt",
+            ETextureFormat::Rgb10A2Unorm => "RGB10A2 UNORM",
+            ETextureFormat::Rgb10A2Uint => "RGB10A2 UINT",
+            ETextureFormat::Rg32Uint => "RG32 UINT",
+            ETextureFormat::Rg32Sint => "RG32 SINT",
+            ETextureFormat::Rg32Float => "RG32 FLOAT",
+            ETextureFormat::Rgba16Unorm => "RGBA16 UNORM",
+            ETextureFormat::Rgba16Snorm => "RGBA16 SNORM",
+            ETextureFormat::Rgba16Uint => "RGBA16 UINT",
+            ETextureFormat::Rgba16Sint => "RGBA16 SINT",
+            ETextureFormat::Rgba32Uint => "RGBA32 UINT",
+            ETextureFormat::Rgba32Sint => "RGBA32 SINT",
+            ETextureFormat::None => "[unknown]",
+            ETextureFormat::RgbaAstc4x4 => "ASTC 4x4",
+            ETextureFormat::RgbaAstc5x4 => "ASTC 5x4",
+            ETextureFormat::RgbaAstc5x5 => "ASTC 5x5",
+            ETextureFormat::RgbaAstc6x5 => "ASTC 6x5",
+            ETextureFormat::RgbaAstc6x6 => "ASTC 6x6",
+            ETextureFormat::RgbaAstc8x5 => "ASTC 8x5",
+            ETextureFormat::RgbaAstc8x6 => "ASTC 8x6",
+            ETextureFormat::RgbaAstc8x8 => "ASTC 8x8",
+            ETextureFormat::RgbaAstc10x5 => "ASTC 10x5",
+            ETextureFormat::RgbaAstc10x6 => "ASTC 10x6",
+            ETextureFormat::RgbaAstc10x8 => "ASTC 10x8",
+            ETextureFormat::RgbaAstc10x10 => "ASTC 10x10",
+            ETextureFormat::RgbaAstc12x10 => "ASTC 12x10",
+            ETextureFormat::RgbaAstc12x12 => "ASTC 12x12",
+            ETextureFormat::RgbaAstc4x4Srgb => "ASTC 4x4 (sRGB)",
+            ETextureFormat::RgbaAstc5x4Srgb => "ASTC 5x4 (sRGB)",
+            ETextureFormat::RgbaAstc5x5Srgb => "ASTC 5x5 (sRGB)",
+            ETextureFormat::RgbaAstc6x5Srgb => "ASTC 6x5 (sRGB)",
+            ETextureFormat::RgbaAstc6x6Srgb => "ASTC 6x6 (sRGB)",
+            ETextureFormat::RgbaAstc8x5Srgb => "ASTC 8x5 (sRGB)",
+            ETextureFormat::RgbaAstc8x6Srgb => "ASTC 8x6 (sRGB)",
+            ETextureFormat::RgbaAstc8x8Srgb => "ASTC 8x8 (sRGB)",
+            ETextureFormat::RgbaAstc10x5Srgb => "ASTC 10x5 (sRGB)",
+            ETextureFormat::RgbaAstc10x6Srgb => "ASTC 10x6 (sRGB)",
+            ETextureFormat::RgbaAstc10x8Srgb => "ASTC 10x8 (sRGB)",
+            ETextureFormat::RgbaAstc10x10Srgb => "ASTC 10x10 (sRGB)",
+            ETextureFormat::RgbaAstc12x10Srgb => "ASTC 12x10 (sRGB)",
+            ETextureFormat::RgbaAstc12x12Srgb => "ASTC 12x12 (sRGB)",
+            ETextureFormat::BptcUfloat => "BC6H UFLOAT",
+            ETextureFormat::BptcSfloat => "BC6H SFLOAT",
+            ETextureFormat::BptcUnorm => "BC7 UNORM",
+            ETextureFormat::BptcUnormSrgb => "BC7 UNORM (sRGB)",
+        })
+    }
 }
 
 impl ETextureFormat {
@@ -426,7 +538,7 @@ fn deswizzle(header: &STextureHeader, data: &[u8]) -> Result<Vec<u8>> {
         depth: NonZeroUsize::new(bd as usize).unwrap(),
     };
     let bpp = header.format.bytes_per_pixel() as usize;
-    let (depth, layers) = if header.kind == ETextureType::_3D {
+    let (depth, layers) = if header.kind == ETextureType::D3 {
         (header.layers as usize, 1)
     } else {
         (1, header.layers as usize)
@@ -495,47 +607,52 @@ impl TextureData {
     }
 }
 
-pub fn texture_to_image(texture: &TextureData) -> Result<DynamicImage> {
-    let h = texture.head.height;
-    let w = texture.head.width;
-    let data = &texture.data[..texture.head.mip_sizes[0] as usize / texture.head.layers as usize];
-    let image = match texture.head.format {
-        ETextureFormat::R8Unorm => DynamicImage::ImageLuma8(
-            GrayImage::from_raw(w, h, data.to_vec()).ok_or_else(|| anyhow!("Conversion failed"))?,
-        ),
+pub fn decompress_images(texture: &TextureData) -> Result<Vec<Vec<DynamicImage>>> {
+    let mut out = Vec::with_capacity(texture.head.mip_sizes.len());
+    let mut w = texture.head.width;
+    let mut h = texture.head.height;
+    let mut start = 0usize;
+    for &size in &texture.head.mip_sizes {
+        let mip_data = &texture.data[start..start + size as usize];
+        let mut images = Vec::with_capacity(texture.head.layers as usize);
+        for layer_data in mip_data.chunks_exact(size as usize / texture.head.layers as usize) {
+            images.push(decompress_image(texture.head.format, w, h, layer_data)?);
+        }
+        out.push(images);
+        start += size as usize;
+        w = max(w / 2, 2);
+        h = max(h / 2, 2);
+    }
+    Ok(out)
+}
+
+fn decompress_image(format: ETextureFormat, w: u32, h: u32, data: &[u8]) -> Result<DynamicImage> {
+    Ok(match format {
+        ETextureFormat::R8Unorm => {
+            DynamicImage::ImageLuma8(GrayImage::from_raw(w, h, data.to_vec()).ok_or_else(|| {
+                anyhow!("Conversion failed: {:?} {}x{} from size {}", format, w, h, data.len())
+            })?)
+        }
         ETextureFormat::R16Unorm => DynamicImage::ImageLuma16(
             ImageBuffer::<Luma<u16>, Vec<u16>>::from_raw(w, h, bytemuck::cast_vec(data.to_vec()))
-                .ok_or_else(|| anyhow!("Conversion failed"))?,
+                .ok_or_else(|| {
+                anyhow!("Conversion failed: {:?} {}x{} from size {}", format, w, h, data.len())
+            })?,
         ),
-        ETextureFormat::Rgb8Unorm => DynamicImage::ImageRgb8(
-            RgbImage::from_raw(w, h, data.to_vec()).ok_or_else(|| anyhow!("Conversion failed"))?,
-        ),
+        ETextureFormat::Rgb8Unorm => {
+            DynamicImage::ImageRgb8(RgbImage::from_raw(w, h, data.to_vec()).ok_or_else(|| {
+                anyhow!("Conversion failed: {:?} {}x{} from size {}", format, w, h, data.len())
+            })?)
+        }
         ETextureFormat::Rgba8Unorm | ETextureFormat::Rgba8Srgb => {
-            // TODO big hack
-            if texture.head.kind == ETextureType::_3D {
-                let mut image = RgbaImage::new(w * texture.head.layers, h);
-                for (idx, data) in texture
-                    .data
-                    .chunks_exact(texture.head.mip_sizes[0] as usize / texture.head.layers as usize)
-                    .enumerate()
-                {
-                    let input = RgbaImage::from_raw(w, h, data.to_vec())
-                        .ok_or_else(|| anyhow!("Conversion failed"))?;
-                    for (x, y, pixel) in input.enumerate_pixels() {
-                        image.put_pixel(idx as u32 * w + x, y, *pixel);
-                    }
-                }
-                DynamicImage::ImageRgba8(image)
-            } else {
-                DynamicImage::ImageRgba8(
-                    RgbaImage::from_raw(w, h, data.to_vec())
-                        .ok_or_else(|| anyhow!("Conversion failed"))?,
-                )
-            }
+            DynamicImage::ImageRgba8(RgbaImage::from_raw(w, h, data.to_vec()).ok_or_else(|| {
+                anyhow!("Conversion failed: {:?} {}x{} from size {}", format, w, h, data.len())
+            })?)
         }
         ETextureFormat::Rgba32Float => DynamicImage::ImageRgba32F(
-            Rgba32FImage::from_raw(w, h, bytemuck::cast_vec(data.to_vec()))
-                .ok_or_else(|| anyhow!("Conversion failed"))?,
+            Rgba32FImage::from_raw(w, h, bytemuck::cast_vec(data.to_vec())).ok_or_else(|| {
+                anyhow!("Conversion failed: {:?} {}x{} from size {}", format, w, h, data.len())
+            })?,
         ),
         ETextureFormat::RgbaBc1Unorm | ETextureFormat::RgbaBc1Srgb => DynamicImage::ImageRgba8(
             decompress_bcn::<Rgba<u8>, _, BC1_BLOCK_SIZE>(data, w, h, |src, dst, pitch| unsafe {
@@ -566,7 +683,9 @@ pub fn texture_to_image(texture: &TextureData) -> Result<DynamicImage> {
         ),
         ETextureFormat::Rgba16Unorm => DynamicImage::ImageRgba16(
             ImageBuffer::<Rgba<u16>, Vec<u16>>::from_raw(w, h, bytemuck::cast_vec(data.to_vec()))
-                .ok_or_else(|| anyhow!("Conversion failed"))?,
+                .ok_or_else(|| {
+                anyhow!("Conversion failed: {:?} {}x{} from size {}", format, w, h, data.len())
+            })?,
         ),
         ETextureFormat::RgbaAstc4x4
         | ETextureFormat::RgbaAstc5x4
@@ -597,9 +716,9 @@ pub fn texture_to_image(texture: &TextureData) -> Result<DynamicImage> {
         | ETextureFormat::RgbaAstc12x10Srgb
         | ETextureFormat::RgbaAstc12x12Srgb => {
             let mut image = RgbaImage::new(w, h);
-            let (bh, bw, _) = texture.head.format.block_size();
+            let (bh, bw, _) = format.block_size();
             astc_decode::astc_decode(
-                &*texture.data,
+                data,
                 w,
                 h,
                 astc_decode::Footprint::new(bh as u32, bw as u32),
@@ -608,7 +727,7 @@ pub fn texture_to_image(texture: &TextureData) -> Result<DynamicImage> {
             DynamicImage::ImageRgba8(image)
         }
         ETextureFormat::BptcUfloat | ETextureFormat::BptcSfloat => {
-            let is_signed = texture.head.format == ETextureFormat::BptcSfloat;
+            let is_signed = format == ETextureFormat::BptcSfloat;
             DynamicImage::ImageRgb32F(decompress_bcn::<Rgb<f32>, _, BC6H_BLOCK_SIZE>(
                 data,
                 w,
@@ -622,8 +741,7 @@ pub fn texture_to_image(texture: &TextureData) -> Result<DynamicImage> {
             })?,
         ),
         format => bail!("Unsupported conversion from {format:?}"),
-    };
-    Ok(image)
+    })
 }
 
 fn decompress_bcn<P, F, const BLOCK_SIZE: usize>(
@@ -636,6 +754,8 @@ where
     P: Pixel,
     F: Fn(*const u8, *mut u8, u32),
 {
+    let w = max(w, 4);
+    let h = max(h, 4);
     ensure!(data.len() == ((w / 4) * (h / 4)) as usize * BLOCK_SIZE);
     let mut image = ImageBuffer::<P, Vec<P::Subpixel>>::new(w, h);
     let mut src = data.as_ptr();

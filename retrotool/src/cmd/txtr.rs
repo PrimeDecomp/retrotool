@@ -51,8 +51,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
     let TextureData { head, data } = TextureData::slice(&data, meta, Endian::Little)?;
 
     log::info!("Texture info:");
-    log::info!("  Type: {:?}", head.kind);
-    log::info!("  Format: {:?}", head.format);
+    log::info!("  Type: {}", head.kind);
+    log::info!("  Format: {}", head.format);
     log::info!("  Size: {}x{}x{}", head.width, head.height, head.layers);
     log::info!("  Mip count: {}", head.mip_sizes.len());
 
