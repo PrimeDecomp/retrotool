@@ -21,11 +21,11 @@ use crate::{
     loaders::{
         material::MaterialAssetLoader,
         modcon::ModConAssetLoader,
-        model::ModelAssetLoader,
+        model::{ModelAsset, ModelAssetLoader},
         package::{
             package_loader_system, PackageAssetLoader, PackageDirectory, RetroAssetIoPlugin,
         },
-        texture::TextureAssetLoader,
+        texture::{TextureAsset, TextureAssetLoader},
     },
     material::CustomMaterial,
     render::TemporaryLabel,
@@ -81,10 +81,11 @@ fn main() {
         .add_plugin(MaterialAssetLoader)
         .add_plugin(ModConAssetLoader)
         .add_plugin(EguiPlugin)
-        .add_startup_system(setup_icon_font)
-        .add_system(file_drop)
+        .add_startup_system(setup_egui)
+        .add_system(file_drop.before(load_files))
         .add_system(load_files)
-        .add_system(package_loader_system)
+        .add_system(package_loader_system.before(ui_system))
+        .add_system(bottom_bar_system.before(ui_system))
         .add_system(ui_system)
         .run();
 }
@@ -151,6 +152,25 @@ fn load_files(
             loading.0.push(server.load(path_buf));
         }
     }
+}
+
+fn bottom_bar_system(
+    mut egui_ctx: EguiContexts,
+    textures: Res<Assets<TextureAsset>>,
+    models: Res<Assets<ModelAsset>>,
+    entities: Query<Entity>,
+) {
+    let entity_count = entities.iter().count();
+    egui::TopBottomPanel::bottom("bottom_panel").show(egui_ctx.ctx_mut(), |ui| {
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "[Loaded] Textures: {} | Models: {} | Entities: {}",
+                textures.len(),
+                models.len(),
+                entity_count
+            ));
+        });
+    });
 }
 
 fn ui_system(world: &mut World) {
@@ -232,7 +252,7 @@ fn ui_system(world: &mut World) {
     });
 }
 
-fn setup_icon_font(mut context: EguiContexts, state: ResMut<UiState>) {
+fn setup_egui(mut context: EguiContexts, state: ResMut<UiState>) {
     let ctx = context.ctx_mut();
 
     let font = egui::FontData::from_static(include_bytes!("../icon.ttf"));

@@ -42,7 +42,6 @@ pub struct ModConTab {
     pub camera: ModelCamera,
     pub diffuse_map: Handle<Image>,
     pub specular_map: Handle<Image>,
-    pub combined_aabb: Aabb,
 }
 
 impl ModConTab {
@@ -181,17 +180,14 @@ impl SystemTab for ModConTab {
             loaded = true;
         }
 
-        if loaded {
-            let all_loaded = self.models.iter().all(|m| !m.loaded.is_empty());
-            if all_loaded {
-                let mut min = Vec3A::splat(f32::MAX);
-                let mut max = Vec3A::splat(f32::MIN);
-                for info in &self.models {
-                    min = info.aabb.min().min(min);
-                    max = info.aabb.max().max(max);
-                }
-                self.camera.init(&Aabb::from_min_max(min.into(), max.into()), true);
+        if loaded && self.models.iter().all(|m| !m.loaded.is_empty()) {
+            let mut min = Vec3A::splat(f32::MAX);
+            let mut max = Vec3A::splat(f32::MIN);
+            for info in &self.models {
+                min = info.aabb.min().min(min);
+                max = info.aabb.max().max(max);
             }
+            self.camera.init(&Aabb::from_min_max(min.into(), max.into()), true);
         }
 
         // FIXME
@@ -230,8 +226,7 @@ impl SystemTab for ModConTab {
         self.camera.update(&rect, &response, ui.input(|i| i.scroll_delta));
 
         let (mut commands, server, models, mod_con_assets) = query;
-        let all_loaded = self.models.iter().all(|m| !m.loaded.is_empty());
-        if !all_loaded {
+        if !self.models.iter().all(|m| !m.loaded.is_empty()) {
             ui.centered_and_justified(|ui| {
                 match self.get_load_state(&server, &mod_con_assets, &models) {
                     LoadState::Failed => egui::Label::new(

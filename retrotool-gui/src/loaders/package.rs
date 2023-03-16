@@ -105,6 +105,9 @@ pub struct RetroAssetIoPlugin;
 
 impl Plugin for RetroAssetIoPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(feature = "embed")]
+        let default = Box::new(bevy_embedded_assets::EmbeddedAssetIo::preloaded());
+        #[cfg(not(feature = "embed"))]
         let default = AssetPlugin::default().create_platform_default_asset_io();
         let shared_package_info = SharedPackageInfo { packages: Arc::new(Default::default()) };
         let asset_io = RetroAssetIo { default, packages: shared_package_info.clone() };

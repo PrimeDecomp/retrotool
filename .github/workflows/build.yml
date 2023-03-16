@@ -186,7 +186,11 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Cargo build
-        run: cargo ${{ matrix.build }} --release --target ${{ matrix.target }} --bin ${{ env.CARGO_BIN_NAME }}
+        env:
+          BEVY_ASSET_PATH: ${{ github.workspace }}/retrotool-gui/assets
+        run: |
+          cargo ${{ matrix.build }} --release --target ${{ matrix.target }} \
+            --bin ${{ env.CARGO_BIN_NAME }} --features embed
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
