@@ -1,6 +1,7 @@
 pub mod chunk;
 pub mod cmdl;
 pub mod foot;
+pub mod mcon;
 pub mod mtrl;
 pub mod pack;
 pub mod rfrm;
@@ -8,10 +9,12 @@ pub mod txtr;
 
 use std::{
     fmt::{Debug, Display, Formatter, Write},
+    marker::PhantomData,
+    num::TryFromIntError,
     string::FromUtf8Error,
 };
 
-use binrw::binrw;
+use binrw::{binrw, BinRead, BinWrite};
 
 use crate::array_ref;
 
@@ -85,6 +88,9 @@ impl CColor4f {
 impl From<CColor4f> for [f32; 4] {
     fn from(value: CColor4f) -> Self { value.to_array() }
 }
+impl Default for CColor4f {
+    fn default() -> Self { Self { r: 0.0, g: 0.0, b: 0.0, a: 1.0 } }
+}
 
 #[binrw]
 #[derive(Copy, Clone, Debug)]
@@ -125,6 +131,19 @@ pub struct CTransform4f {
     m23: f32,
 }
 
+impl CTransform4f {
+    #[inline]
+    #[rustfmt::skip]
+    pub fn to_matrix_array(&self) -> [f32; 16] {
+        [
+            self.m00, self.m01, self.m02, 0.0,
+            self.m10, self.m11, self.m12, 0.0,
+            self.m20, self.m21, self.m22, 0.0,
+            self.m03, self.m13, self.m23, 1.0,
+        ]
+    }
+}
+
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct COBBox {
@@ -148,4 +167,41 @@ impl CStringFixedName {
     }
 
     fn into_string(self) -> Result<String, FromUtf8Error> { String::from_utf8(self.text) }
+}
+
+#[binrw]
+#[derive(Clone, Debug, Default)]
+struct TaggedVec<C, T>
+where
+    C: for<'a> BinRead<Args<'a> = ()>
+        + for<'a> BinWrite<Args<'a> = ()>
+        + Copy
+        + TryFrom<usize, Error = TryFromIntError>
+        + 'static,
+    T: for<'a> BinRead<Args<'a> = ()> + for<'a> BinWrite<Args<'a> = ()> + 'static,
+    usize: TryFrom<C, Error = TryFromIntError>,
+{
+    #[bw(try_calc(data.len().try_into()))]
+    count: C,
+    #[br(count(count))]
+    data: Vec<T>,
+    _marker: PhantomData<C>,
+}
+
+impl<C, T> TaggedVec<C, T>
+where
+    C: for<'a> BinRead<Args<'a> = ()>
+        + for<'a> BinWrite<Args<'a> = ()>
+        + Copy
+        + Default
+        + TryFrom<usize, Error = TryFromIntError>
+        + 'static,
+    T: for<'a> BinRead<Args<'a> = ()> + for<'a> BinWrite<Args<'a> = ()> + Default + 'static,
+    usize: TryFrom<C, Error = TryFromIntError>,
+{
+    #[allow(dead_code)]
+    fn new(inner: Vec<T>) -> Self {
+        #[allow(clippy::needless_update)]
+        Self { data: inner, ..Default::default() }
+    }
 }

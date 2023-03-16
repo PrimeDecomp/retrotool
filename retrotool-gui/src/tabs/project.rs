@@ -8,6 +8,7 @@ use bevy_egui::{EguiContext, EguiUserTextures};
 use egui::{text::LayoutJob, Color32, TextFormat, Widget};
 use retrolib::format::{
     cmdl::{K_FORM_CMDL, K_FORM_SMDL, K_FORM_WMDL},
+    mcon::K_FORM_MCON,
     txtr::{ETextureFormat, ETextureType, K_FORM_TXTR},
     FourCC,
 };
@@ -15,7 +16,7 @@ use retrolib::format::{
 use crate::{
     icon,
     loaders::{model::ModelAsset, package::PackageDirectory, texture::TextureAsset},
-    tabs::{model::ModelTab, texture::TextureTab, SystemTab, TabState, TabType},
+    tabs::{modcon::ModConTab, model::ModelTab, texture::TextureTab, SystemTab, TabState, TabType},
     AssetRef,
 };
 
@@ -172,7 +173,7 @@ impl SystemTab for ProjectTab {
                                 K_FORM_TXTR => icon::TEXTURE,
                                 K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => icon::FILE_3D,
                                 K_FORM_FMV0 => icon::FILE_MOVIE,
-                                K_FORM_ROOM => icon::SCENE_DATA,
+                                K_FORM_ROOM | K_FORM_MCON => icon::SCENE_DATA,
                                 _ => icon::FILE,
                             },
                             entry.kind,
@@ -212,7 +213,7 @@ impl SystemTab for ProjectTab {
                                     entry.id, entry.kind
                                 ));
                                 state.open_tab = Some(TabType::Texture(TextureTab {
-                                    asset_ref: asset_ref.clone(),
+                                    asset_ref,
                                     handle,
                                     loaded_texture: None,
                                 }));
@@ -221,9 +222,17 @@ impl SystemTab for ProjectTab {
                                 let handle = server
                                     .load::<ModelAsset, _>(format!("{}.{}", entry.id, entry.kind));
                                 state.open_tab = Some(TabType::Model(ModelTab {
-                                    asset_ref: asset_ref.clone(),
+                                    asset_ref,
                                     handle,
-                                    loaded: None,
+                                    ..default()
+                                }));
+                            }
+                            K_FORM_MCON => {
+                                let handle = server.load(format!("{}.{}", entry.id, entry.kind));
+                                state.open_tab = Some(TabType::ModCon(ModConTab {
+                                    asset_ref,
+                                    handle,
+                                    ..default()
                                 }));
                             }
                             _ => {}

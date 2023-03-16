@@ -1,6 +1,7 @@
 mod icon;
 mod loaders;
 mod material;
+mod render;
 mod tabs;
 
 use std::{path::PathBuf, time::Duration};
@@ -19,6 +20,7 @@ use walkdir::{DirEntry, WalkDir};
 use crate::{
     loaders::{
         material::MaterialAssetLoader,
+        modcon::ModConAssetLoader,
         model::ModelAssetLoader,
         package::{
             package_loader_system, PackageAssetLoader, PackageDirectory, RetroAssetIoPlugin,
@@ -26,7 +28,8 @@ use crate::{
         texture::TextureAssetLoader,
     },
     material::CustomMaterial,
-    tabs::{load_tab, model::TemporaryLabel, project::ProjectTab, TabState, TabType, TabViewer},
+    render::TemporaryLabel,
+    tabs::{load_tab, project::ProjectTab, TabState, TabType, TabViewer},
 };
 
 #[derive(Default, Resource)]
@@ -76,6 +79,7 @@ fn main() {
         .add_plugin(TextureAssetLoader)
         .add_plugin(ModelAssetLoader)
         .add_plugin(MaterialAssetLoader)
+        .add_plugin(ModConAssetLoader)
         .add_plugin(EguiPlugin)
         .add_startup_system(setup_icon_font)
         .add_system(file_drop)
@@ -179,11 +183,15 @@ fn ui_system(world: &mut World) {
                         }
                         TabType::Texture(tab) => {
                             load_tab(world, &mut ctx, tab);
-                            tab_assets.push(tab.asset_ref.clone());
+                            tab_assets.push(tab.asset_ref);
                         }
                         TabType::Model(tab) => {
                             load_tab(world, &mut ctx, tab);
-                            tab_assets.push(tab.asset_ref.clone());
+                            tab_assets.push(tab.asset_ref);
+                        }
+                        TabType::ModCon(tab) => {
+                            load_tab(world, &mut ctx, tab);
+                            tab_assets.push(tab.asset_ref);
                         }
                         TabType::Empty => {}
                     }

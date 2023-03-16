@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Error;
 use bevy::{
     app::{App, Plugin},
-    asset::{AddAsset, AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadedAsset},
+    asset::{AddAsset, AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadState, LoadedAsset},
     prelude::*,
     utils::HashMap,
 };
@@ -23,6 +23,12 @@ pub struct ModelAsset {
     pub textures: HashMap<Uuid, Handle<TextureAsset>>,
 }
 
+impl ModelAsset {
+    pub fn get_load_state(&self, server: &AssetServer) -> LoadState {
+        server.get_group_load_state(self.textures.values().map(|h| h.id()))
+    }
+}
+
 pub struct ModelAssetLoader;
 
 impl Plugin for ModelAssetLoader {
@@ -40,8 +46,8 @@ impl AssetLoader for ModelAssetLoader {
         Box::pin(async move {
             let meta = locate_meta(bytes, Endian::Little)?;
             let data = ModelData::slice(bytes, meta, Endian::Little)?;
-            log::info!("Loaded model {:?}", data.head);
-            log::info!("Loaded meshes {:#?}", data.mesh);
+            // log::info!("Loaded model {:?}", data.head);
+            // log::info!("Loaded meshes {:#?}", data.mesh);
             let mut dependencies = HashMap::<Uuid, AssetPath>::new();
             for mat in &data.mtrl.materials {
                 for data in &mat.data {

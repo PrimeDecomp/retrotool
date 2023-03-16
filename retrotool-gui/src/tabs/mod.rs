@@ -1,3 +1,4 @@
+pub mod modcon;
 pub mod model;
 pub mod project;
 pub mod texture;
@@ -11,6 +12,7 @@ pub enum TabType {
     Project(project::ProjectTab),
     Texture(texture::TextureTab),
     Model(model::ModelTab),
+    ModCon(modcon::ModConTab),
     Empty,
 }
 
@@ -79,6 +81,7 @@ impl egui_dock::TabViewer for TabViewer<'_> {
             TabType::Project(tab) => render_tab(self.world, ui, tab, &mut self.state),
             TabType::Texture(tab) => render_tab(self.world, ui, tab, &mut self.state),
             TabType::Model(tab) => render_tab(self.world, ui, tab, &mut self.state),
+            TabType::ModCon(tab) => render_tab(self.world, ui, tab, &mut self.state),
             TabType::Empty => {}
         }
     }
@@ -88,6 +91,7 @@ impl egui_dock::TabViewer for TabViewer<'_> {
             TabType::Project(tab) => tab.title(),
             TabType::Texture(tab) => tab.title(),
             TabType::Model(tab) => tab.title(),
+            TabType::ModCon(tab) => tab.title(),
             TabType::Empty => "".into(),
         }
     }
@@ -103,11 +107,15 @@ impl egui_dock::TabViewer for TabViewer<'_> {
                 close_tab(self.world, tab);
                 true
             }
+            TabType::ModCon(tab) => {
+                close_tab(self.world, tab);
+                true
+            }
             TabType::Empty => false,
         }
     }
 
     fn clear_background(&self, tab: &Self::Tab) -> bool {
-        !matches!(tab, TabType::Empty | TabType::Model(_))
+        !matches!(tab, TabType::Empty | TabType::Model(_) | TabType::ModCon(_))
     }
 }
