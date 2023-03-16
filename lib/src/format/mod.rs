@@ -136,9 +136,9 @@ impl CTransform4f {
     #[rustfmt::skip]
     pub fn to_matrix_array(&self) -> [f32; 16] {
         [
-            self.m00, self.m01, self.m02, 0.0,
-            self.m10, self.m11, self.m12, 0.0,
-            self.m20, self.m21, self.m22, 0.0,
+            self.m00, self.m10, self.m20, 0.0,
+            self.m01, self.m11, self.m21, 0.0,
+            self.m02, self.m12, self.m22, 0.0,
             self.m03, self.m13, self.m23, 1.0,
         ]
     }
