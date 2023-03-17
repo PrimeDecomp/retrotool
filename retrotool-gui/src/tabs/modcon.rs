@@ -356,9 +356,7 @@ impl SystemTab for ModConTab {
         }
         if response.hovered() {
             if let Some(pos) = ui.input(|i| {
-                i.pointer.hover_pos().map(|pos| {
-                    Vec2::new(pos.x, i.screen_rect.height() - pos.y) * i.pixels_per_point
-                })
+                i.pointer.hover_pos().map(|pos| Vec2::new(pos.x, i.screen_rect.height() - pos.y))
             }) {
                 entity.insert(RaycastSource::<ModConRaycastSet>::new_screenspace(
                     pos,
