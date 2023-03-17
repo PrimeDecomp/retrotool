@@ -8,6 +8,8 @@ use std::{path::PathBuf, time::Duration};
 
 use bevy::{
     app::AppExit,
+    asset::diagnostic::AssetCountDiagnosticsPlugin,
+    diagnostic::{Diagnostics, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin},
     prelude::*,
     window::{PrimaryWindow, WindowResolution},
 };
@@ -30,7 +32,7 @@ use crate::{
     },
     material::CustomMaterial,
     render::TemporaryLabel,
-    tabs::{load_tab, modcon::ModConRaycastSet, project::ProjectTab, TabState, TabType, TabViewer},
+    tabs::{load_tab, modcon::ModConRaycastSet, TabState, TabType, TabViewer},
 };
 
 #[derive(Default, Resource)]
@@ -49,9 +51,8 @@ fn main() {
             unfocused_mode: bevy::winit::UpdateMode::ReactiveLowPower {
                 max_wait: Duration::from_secs(5),
             },
-            ..Default::default()
+            ..default()
         })
-        // .insert_resource(AmbientLight { color: Color::rgb(1.0, 1.0, 1.0), brightness: 0.1 })
         .insert_resource(file_open)
         .init_resource::<UiState>()
         .init_resource::<Packages>()
@@ -84,6 +85,12 @@ fn main() {
         .add_plugin(MaterialAssetLoader)
         .add_plugin(ModConAssetLoader)
         .add_plugin(EguiPlugin)
+        // Diagnostics
+        .add_plugin(FrameTimeDiagnosticsPlugin::default())
+        .add_plugin(EntityCountDiagnosticsPlugin::default())
+        .add_plugin(AssetCountDiagnosticsPlugin::<TextureAsset>::default())
+        .add_plugin(AssetCountDiagnosticsPlugin::<ModelAsset>::default())
+        // Systems
         .add_startup_system(setup_egui)
         .add_system(file_drop.before(load_files))
         .add_system(load_files)
@@ -109,9 +116,7 @@ struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         let mut tree = egui_dock::Tree::new(vec![TabType::Empty]);
-        tree.split_left(egui_dock::NodeIndex::root(), 0.25, vec![TabType::Project(
-            ProjectTab::default(),
-        )]);
+        tree.split_left(egui_dock::NodeIndex::root(), 0.25, vec![TabType::Project(default())]);
         Self {
             tree,
             ui_font: FontId { size: 13.0, family: FontFamily::Proportional },
@@ -157,20 +162,27 @@ fn load_files(
     }
 }
 
-fn bottom_bar_system(
-    mut egui_ctx: EguiContexts,
-    textures: Res<Assets<TextureAsset>>,
-    models: Res<Assets<ModelAsset>>,
-    entities: Query<Entity>,
-) {
-    let entity_count = entities.iter().count();
+fn bottom_bar_system(mut egui_ctx: EguiContexts, diagnostics: Res<Diagnostics>) {
     egui::TopBottomPanel::bottom("bottom_panel").show(egui_ctx.ctx_mut(), |ui| {
         ui.horizontal(|ui| {
             ui.label(format!(
-                "[Loaded] Textures: {} | Models: {} | Entities: {}",
-                textures.len(),
-                models.len(),
-                entity_count
+                "[FPS {:.0}] [Loaded Textures: {} | Models: {} | Entities: {}]",
+                diagnostics
+                    .get(FrameTimeDiagnosticsPlugin::FPS)
+                    .and_then(|d| d.smoothed())
+                    .unwrap_or_default(),
+                diagnostics
+                    .get_measurement(AssetCountDiagnosticsPlugin::<TextureAsset>::diagnostic_id())
+                    .map(|d| d.value)
+                    .unwrap_or_default(),
+                diagnostics
+                    .get_measurement(AssetCountDiagnosticsPlugin::<ModelAsset>::diagnostic_id())
+                    .map(|d| d.value)
+                    .unwrap_or_default(),
+                diagnostics
+                    .get_measurement(EntityCountDiagnosticsPlugin::ENTITY_COUNT)
+                    .map(|d| d.value)
+                    .unwrap_or_default(),
             ));
         });
     });
