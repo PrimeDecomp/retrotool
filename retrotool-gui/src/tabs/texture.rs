@@ -16,6 +16,7 @@ pub struct TextureTab {
     pub asset_ref: AssetRef,
     pub handle: Handle<TextureAsset>,
     pub loaded_texture: Option<LoadedTexture>,
+    pub v_flip: bool,
 }
 
 impl SystemTab for TextureTab {
@@ -79,31 +80,34 @@ impl SystemTab for TextureTab {
                 txtr.inner.head.layers,
                 txtr.inner.head.mip_sizes.len()
             ));
+            ui.checkbox(&mut self.v_flip, "Flip texture vertically");
             let w = txtr.inner.head.width;
             let h = txtr.inner.head.height;
             let size = egui::Vec2 { x: w as f32, y: h as f32 };
-            let draw_image = |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32| {
+            let draw_image = |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32, flip: &bool| {
                 let min = egui::Vec2 { x: (w * x) as f32, y: (h * y) as f32 };
                 let max = egui::Vec2 { x: (w * (x + 1)) as f32, y: (h * (y + 1)) as f32 };
+                let y_range = if *flip {1.0..=0.0} else {0.0..=1.0};
                 egui::widgets::Image::new(loaded.texture_ids[i], size)
+                    .uv(egui::Rect::from_x_y_ranges(0.0..=1.0, y_range))
                     .paint_at(ui, egui::Rect { min: rect.min + min, max: rect.min + max });
             };
             if txtr.inner.head.kind == ETextureType::Cube && loaded.texture_ids.len() == 6 {
                 let (_, rect) =
                     ui.allocate_space(egui::Vec2 { x: (w * 4) as f32, y: (h * 3) as f32 });
-                draw_image(ui, &rect, 2, 1, 0);
-                draw_image(ui, &rect, 1, 0, 1);
-                draw_image(ui, &rect, 4, 1, 1);
-                draw_image(ui, &rect, 0, 2, 1);
-                draw_image(ui, &rect, 5, 3, 1);
-                draw_image(ui, &rect, 3, 1, 2);
+                draw_image(ui, &rect, 2, 1, 0, &self.v_flip);
+                draw_image(ui, &rect, 1, 0, 1, &self.v_flip);
+                draw_image(ui, &rect, 4, 1, 1, &self.v_flip);
+                draw_image(ui, &rect, 0, 2, 1, &self.v_flip);
+                draw_image(ui, &rect, 5, 3, 1, &self.v_flip);
+                draw_image(ui, &rect, 3, 1, 2, &self.v_flip);
             } else {
                 let (_, rect) = ui.allocate_space(egui::Vec2 {
                     x: (w as usize * loaded.texture_ids.len()) as f32,
                     y: h as f32,
                 });
                 for i in 0..loaded.texture_ids.len() {
-                    draw_image(ui, &rect, i, i as u32, 0);
+                    draw_image(ui, &rect, i, i as u32, 0, &self.v_flip);
                 }
             }
         }

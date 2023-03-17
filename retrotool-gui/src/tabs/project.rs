@@ -216,6 +216,7 @@ impl SystemTab for ProjectTab {
                                     asset_ref,
                                     handle,
                                     loaded_texture: None,
+                                    v_flip: false,
                                 }));
                             }
                             K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {
