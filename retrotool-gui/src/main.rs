@@ -12,6 +12,7 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use bevy_egui::{egui, EguiContext, EguiContexts, EguiPlugin};
+use bevy_mod_raycast::{DefaultPluginState, DefaultRaycastingPlugin};
 use egui::{FontFamily, FontId};
 use retrolib::format::FourCC;
 use uuid::Uuid;
@@ -29,7 +30,7 @@ use crate::{
     },
     material::CustomMaterial,
     render::TemporaryLabel,
-    tabs::{load_tab, project::ProjectTab, TabState, TabType, TabViewer},
+    tabs::{load_tab, modcon::ModConRaycastSet, project::ProjectTab, TabState, TabType, TabViewer},
 };
 
 #[derive(Default, Resource)]
@@ -74,6 +75,8 @@ fn main() {
                 })
                 .add_before::<AssetPlugin, _>(RetroAssetIoPlugin),
         )
+        .add_plugin(DefaultRaycastingPlugin::<ModConRaycastSet>::default())
+        .insert_resource(DefaultPluginState::<ModConRaycastSet>::default().with_debug_cursor())
         .add_plugin(MaterialPlugin::<CustomMaterial>::default())
         .add_plugin(PackageAssetLoader)
         .add_plugin(TextureAssetLoader)

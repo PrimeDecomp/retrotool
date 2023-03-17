@@ -63,6 +63,7 @@ pub fn load_model(
     let ModelAsset {
         inner: ModelData { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers },
         textures,
+        ..
     } = asset;
 
     // Build sampler descriptors

@@ -9,16 +9,17 @@ use bevy::{
 };
 use binrw::Endian;
 use retrolib::format::{
-    cmdl::{CMaterialDataInner, ModelData},
-    foot::locate_meta,
+    cmdl::{CMaterialDataInner, ModelData, K_FORM_CMDL},
+    foot::{locate_asset_id, locate_meta},
 };
 use uuid::Uuid;
 
-use crate::loaders::texture::TextureAsset;
+use crate::{loaders::texture::TextureAsset, AssetRef};
 
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "83269869-1209-408e-8835-bc6f2496e829"]
 pub struct ModelAsset {
+    pub asset_ref: AssetRef,
     pub inner: ModelData,
     pub textures: HashMap<Uuid, Handle<TextureAsset>>,
 }
@@ -44,6 +45,7 @@ impl AssetLoader for ModelAssetLoader {
         load_context: &'a mut LoadContext,
     ) -> BoxedFuture<'a, anyhow::Result<(), Error>> {
         Box::pin(async move {
+            let id = locate_asset_id(bytes, Endian::Little)?;
             let meta = locate_meta(bytes, Endian::Little)?;
             let data = ModelData::slice(bytes, meta, Endian::Little)?;
             // log::info!("Loaded model {:?}", data.head);
@@ -81,8 +83,12 @@ impl AssetLoader for ModelAssetLoader {
                 .map(|(u, p)| (*u, load_context.get_handle(p.clone())))
                 .collect();
             load_context.set_default_asset(
-                LoadedAsset::new(ModelAsset { inner: data, textures })
-                    .with_dependencies(dependencies.into_values().collect()),
+                LoadedAsset::new(ModelAsset {
+                    asset_ref: AssetRef { id, kind: K_FORM_CMDL },
+                    inner: data,
+                    textures,
+                })
+                .with_dependencies(dependencies.into_values().collect()),
             );
             Ok(())
         })

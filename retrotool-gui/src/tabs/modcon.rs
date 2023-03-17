@@ -7,6 +7,7 @@ use bevy::{
     render::{camera::Viewport, primitives::Aabb, view::RenderLayers},
 };
 use bevy_egui::EguiContext;
+use bevy_mod_raycast::{Intersection, RaycastMesh, RaycastSource};
 use egui::{Sense, Widget};
 
 use crate::{
@@ -18,7 +19,7 @@ use crate::{
         model::{convert_transform, load_model},
         TemporaryLabel,
     },
-    tabs::{SystemTab, TabState},
+    tabs::{model::ModelTab, SystemTab, TabState, TabType},
     AssetRef,
 };
 
@@ -34,7 +35,6 @@ pub struct ModelInfo {
     pub aabb: Aabb,
 }
 
-#[derive(Default)]
 pub struct ModConTab {
     pub asset_ref: AssetRef,
     pub handle: Handle<ModConAsset>,
@@ -42,6 +42,23 @@ pub struct ModConTab {
     pub camera: ModelCamera,
     pub diffuse_map: Handle<Image>,
     pub specular_map: Handle<Image>,
+    pub env_light: bool,
+    pub selected_model: Option<ModelLabel>,
+}
+
+impl Default for ModConTab {
+    fn default() -> Self {
+        Self {
+            asset_ref: default(),
+            handle: default(),
+            models: default(),
+            camera: default(),
+            diffuse_map: default(),
+            specular_map: default(),
+            env_light: true,
+            selected_model: None,
+        }
+    }
 }
 
 impl ModConTab {
@@ -75,6 +92,13 @@ impl ModConTab {
     }
 }
 
+pub struct ModConRaycastSet;
+
+#[derive(Component, Clone, Debug)]
+pub struct ModelLabel {
+    pub asset_ref: AssetRef,
+}
+
 impl SystemTab for ModConTab {
     type LoadParam = (
         SCommands,
@@ -86,8 +110,14 @@ impl SystemTab for ModConTab {
         SResMut<AssetServer>,
         SResMut<Assets<ModConAsset>>,
     );
-    type UiParam =
-        (SCommands, SRes<AssetServer>, SRes<Assets<ModelAsset>>, SRes<Assets<ModConAsset>>);
+    type UiParam = (
+        SCommands,
+        SRes<AssetServer>,
+        SRes<Assets<ModelAsset>>,
+        SRes<Assets<ModConAsset>>,
+        SQuery<&'static Parent, With<Intersection<ModConRaycastSet>>>,
+        SQuery<&'static ModelLabel>,
+    );
 
     fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
         let (
@@ -165,19 +195,25 @@ impl SystemTab for ModConTab {
                     ^ transform.scale.y.is_sign_negative()
                     ^ transform.scale.z.is_sign_negative();
                 let entity = commands
-                    .spawn(SpatialBundle { transform, visibility: Visibility::Hidden, ..default() })
+                    .spawn((
+                        SpatialBundle { transform, visibility: Visibility::Hidden, ..default() },
+                        ModelLabel { asset_ref: asset.asset_ref },
+                    ))
                     .with_children(|builder| {
                         for idx in built.lod[0].meshes.iter() {
                             let mesh = &built.meshes[idx];
-                            builder.spawn(MaterialMeshBundle {
-                                mesh: mesh.mesh.clone(),
-                                material: if is_mirrored {
-                                    mesh.mirrored_material.clone()
-                                } else {
-                                    mesh.material.clone()
+                            builder.spawn((
+                                MaterialMeshBundle {
+                                    mesh: mesh.mesh.clone(),
+                                    material: if is_mirrored {
+                                        mesh.mirrored_material.clone()
+                                    } else {
+                                        mesh.material.clone()
+                                    },
+                                    ..default()
                                 },
-                                ..default()
-                            });
+                                RaycastMesh::<ModConRaycastSet>::default(),
+                            ));
                         }
                     })
                     .id();
@@ -228,11 +264,11 @@ impl SystemTab for ModConTab {
             physical_size: UVec2 { x: size.x as u32, y: size.y as u32 },
             depth: 0.0..1.0,
         };
-        let response =
+        let mut response =
             ui.interact(rect, ui.make_persistent_id("background"), Sense::click_and_drag());
         self.camera.update(&rect, &response, ui.input(|i| i.scroll_delta));
 
-        let (mut commands, server, models, mod_con_assets) = query;
+        let (mut commands, server, models, mod_con_assets, intersection_query, model_query) = query;
         if !self.models.iter().all(|m| !m.loaded.is_empty()) {
             ui.centered_and_justified(|ui| {
                 match self.get_load_state(&server, &mod_con_assets, &models) {
@@ -246,17 +282,54 @@ impl SystemTab for ModConTab {
             return;
         }
 
+        if let Some(parent) = intersection_query.iter().next() {
+            self.selected_model = Some(model_query.get(parent.get()).unwrap().clone());
+        }
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical().max_height(rect.height() * 0.25).show(ui, |ui| {
+                ui.checkbox(&mut self.env_light, "Environment lighting");
                 ui.label(format!("Models: {}", self.models.len()));
                 ui.label(format!(
                     "Instances: {}",
                     self.models.iter().map(|m| m.loaded.len()).sum::<usize>()
-                ))
+                ));
+                if let Some(selected) = &self.selected_model {
+                    ui.label(format!("Hovering: {}", selected.asset_ref.id));
+                }
             });
         });
 
-        commands.spawn((
+        if let Some(selected) = &self.selected_model {
+            let mut shown = false;
+            response = response.context_menu(|ui| {
+                if ui.button("Open in new tab").clicked() {
+                    let handle = server
+                        .load(format!("{}.{}", selected.asset_ref.id, selected.asset_ref.kind));
+                    state.open_tab = Some(TabType::Model(ModelTab {
+                        asset_ref: selected.asset_ref,
+                        handle,
+                        ..default()
+                    }));
+                    ui.close_menu();
+                }
+                if ui.button("Copy GUID").clicked() {
+                    ui.output_mut(|out| out.copied_text = format!("{}", selected.asset_ref.id));
+                    ui.close_menu();
+                }
+                shown = true;
+            });
+            if !shown {
+                self.selected_model = None;
+            }
+        }
+
+        let camera = Camera {
+            viewport: Some(viewport),
+            order: state.render_layer as isize,
+            // hdr: true,
+            ..default()
+        };
+        let mut entity = commands.spawn((
             Camera3dBundle {
                 camera_3d: Camera3d {
                     clear_color: if state.render_layer == 0 {
@@ -266,24 +339,34 @@ impl SystemTab for ModConTab {
                     },
                     ..default()
                 },
-                camera: Camera {
-                    viewport: Some(viewport),
-                    order: state.render_layer as isize,
-                    // hdr: true,
-                    ..default()
-                },
+                camera: camera.clone(),
                 tonemapping: Tonemapping::TonyMcMapface,
                 transform: self.camera.transform,
                 ..default()
             },
             // BloomSettings::default(),
-            EnvironmentMapLight {
-                diffuse_map: self.diffuse_map.clone(),
-                specular_map: self.specular_map.clone(),
-            },
             RenderLayers::layer(state.render_layer),
             TemporaryLabel,
         ));
+        if self.env_light {
+            entity.insert(EnvironmentMapLight {
+                diffuse_map: self.diffuse_map.clone(),
+                specular_map: self.specular_map.clone(),
+            });
+        }
+        if response.hovered() {
+            if let Some(pos) = ui.input(|i| {
+                i.pointer.hover_pos().map(|pos| {
+                    Vec2::new(pos.x, i.screen_rect.height() - pos.y) * i.pixels_per_point
+                })
+            }) {
+                entity.insert(RaycastSource::<ModConRaycastSet>::new_screenspace(
+                    pos,
+                    &camera,
+                    &GlobalTransform::default(),
+                ));
+            }
+        }
         // FIXME: https://github.com/bevyengine/bevy/issues/3462
         if state.render_layer == 0 {
             // commands.spawn((
