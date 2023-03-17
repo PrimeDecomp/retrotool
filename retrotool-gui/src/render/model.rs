@@ -24,7 +24,7 @@ use retrolib::format::{
     CAABox, CTransform4f,
 };
 use uuid::Uuid;
-use wgpu_types::{AddressMode, FilterMode, PrimitiveTopology};
+use wgpu_types::{AddressMode, Face, FilterMode, PrimitiveTopology};
 
 use crate::{
     loaders::{model::ModelAsset, texture::TextureAsset},
@@ -34,6 +34,7 @@ use crate::{
 pub struct BuiltMesh {
     pub mesh: Handle<Mesh>,
     pub material: Handle<CustomMaterial>,
+    pub mirrored_material: Handle<CustomMaterial>,
     pub material_name: String,
     pub visible: bool,
 }
@@ -141,6 +142,7 @@ pub fn load_model(
 
     // Build materials
     let mut material_handles = Vec::with_capacity(mtrl.materials.len());
+    let mut material_handles_mirrored = Vec::with_capacity(mtrl.materials.len());
     for mat in &mtrl.materials {
         let mut out_mat = CustomMaterial::default();
         // log::info!("Shader {}, unk {}", mat.shader_id, mat.unk_guid);
@@ -295,7 +297,9 @@ pub fn load_model(
                 }
             }
         }
-        material_handles.push(materials.add(out_mat));
+        material_handles.push(materials.add(out_mat.clone()));
+        out_mat.cull_mode = Some(Face::Front);
+        material_handles_mirrored.push(materials.add(out_mat));
     }
 
     // Process meshes
@@ -326,6 +330,7 @@ pub fn load_model(
         out_meshes.push(BuiltMesh {
             mesh: meshes.add(out_mesh),
             material: material_handles[in_mesh.material_idx as usize].clone(),
+            mirrored_material: material_handles_mirrored[in_mesh.material_idx as usize].clone(),
             material_name: mtrl.materials[in_mesh.material_idx as usize].name.clone(),
             visible: true,
         });

@@ -161,6 +161,9 @@ impl SystemTab for ModConTab {
                 }
             };
             for &transform in &info.transforms {
+                let is_mirrored = transform.scale.x.is_sign_negative()
+                    ^ transform.scale.y.is_sign_negative()
+                    ^ transform.scale.z.is_sign_negative();
                 let entity = commands
                     .spawn(SpatialBundle { transform, visibility: Visibility::Hidden, ..default() })
                     .with_children(|builder| {
@@ -168,7 +171,11 @@ impl SystemTab for ModConTab {
                             let mesh = &built.meshes[idx];
                             builder.spawn(MaterialMeshBundle {
                                 mesh: mesh.mesh.clone(),
-                                material: mesh.material.clone(),
+                                material: if is_mirrored {
+                                    mesh.mirrored_material.clone()
+                                } else {
+                                    mesh.material.clone()
+                                },
                                 ..default()
                             });
                         }

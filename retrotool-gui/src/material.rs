@@ -19,9 +19,13 @@ const ATTRIBUTE_TANGENT_2: MeshVertexAttribute =
     MeshVertexAttribute::new("Vertex_Tangent_2", 988540921, VertexFormat::Float32x4);
 
 // This is the struct that will be passed to your shader
-#[derive(AsBindGroup, Debug, Clone, TypeUuid)]
+#[derive(AsBindGroup, Reflect, FromReflect, Debug, Clone, TypeUuid)]
 #[uuid = "f690fdae-d598-45ab-8225-97e2a3f056e0"]
+#[bind_group_data(CustomMaterialKey)]
+#[reflect(Default, Debug)]
 pub struct CustomMaterial {
+    #[reflect(ignore)]
+    pub cull_mode: Option<Face>,
     #[uniform(0)]
     pub base_color: Color,
     #[texture(1)]
@@ -101,6 +105,7 @@ pub struct CustomMaterial {
 impl Default for CustomMaterial {
     fn default() -> Self {
         Self {
+            cull_mode: Some(Face::Back),
             base_color: Color::WHITE,
             base_color_texture_0: None,
             base_color_texture_1: None,
@@ -136,6 +141,15 @@ impl Default for CustomMaterial {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct CustomMaterialKey {
+    pub cull_mode: Option<Face>,
+}
+
+impl From<&CustomMaterial> for CustomMaterialKey {
+    fn from(material: &CustomMaterial) -> Self { Self { cull_mode: material.cull_mode } }
+}
+
 impl Material for CustomMaterial {
     fn vertex_shader() -> ShaderRef { "custom_material.wgsl".into() }
 
@@ -145,7 +159,7 @@ impl Material for CustomMaterial {
         _pipeline: &MaterialPipeline<Self>,
         descriptor: &mut RenderPipelineDescriptor,
         layout: &MeshVertexBufferLayout,
-        _key: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         let mut shader_defs = Vec::<ShaderDefVal>::new();
         let mut vertex_attributes = Vec::new();
@@ -178,6 +192,7 @@ impl Material for CustomMaterial {
         descriptor.vertex.buffers = vec![vertex_buffer_layout];
         descriptor.vertex.shader_defs.append(&mut shader_defs.clone());
         descriptor.fragment.as_mut().unwrap().shader_defs.append(&mut shader_defs);
+        descriptor.primitive.cull_mode = key.bind_group_data.cull_mode;
         Ok(())
     }
 }
