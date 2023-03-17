@@ -97,7 +97,7 @@ impl AssetLoader for TextureAssetLoader {
             } else {
                 (
                     images.iter().flatten().flat_map(|i| &i.data).cloned().collect(),
-                    TextureFormat::Rgba8Unorm,
+                    if is_srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm },
                 )
             };
             let texture = texture_to_image(&data, format, image_data)?;
