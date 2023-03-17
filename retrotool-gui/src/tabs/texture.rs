@@ -4,19 +4,35 @@ use bevy::{
     prelude::*,
 };
 use bevy_egui::{EguiContext, EguiUserTextures};
+use egui::Widget;
 use retrolib::format::txtr::ETextureType;
 
 use crate::{icon, loaders::texture::TextureAsset, tabs::SystemTab, AssetRef, TabState};
 
 pub struct LoadedTexture {
+    pub width: u32,
+    pub height: u32,
     pub texture_ids: Vec<egui::TextureId>,
 }
 
 pub struct TextureTab {
     pub asset_ref: AssetRef,
     pub handle: Handle<TextureAsset>,
-    pub loaded_texture: Option<LoadedTexture>,
+    pub loaded_textures: Vec<LoadedTexture>,
+    pub selected_mip: usize,
     pub v_flip: bool,
+}
+
+impl Default for TextureTab {
+    fn default() -> Self {
+        Self {
+            asset_ref: default(),
+            handle: default(),
+            loaded_textures: default(),
+            selected_mip: 0,
+            v_flip: false,
+        }
+    }
 }
 
 impl SystemTab for TextureTab {
@@ -25,20 +41,26 @@ impl SystemTab for TextureTab {
     type UiParam = (SRes<AssetServer>, SRes<Assets<TextureAsset>>);
 
     fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
-        if self.loaded_texture.is_some() {
+        if !self.loaded_textures.is_empty() {
             return;
         }
 
         let (textures, mut images, mut egui_textures) = query;
         let Some(asset) = textures.get(&self.handle) else { return; };
-        let mut texture_ids = Vec::new();
-        if let Some(first_mip) = asset.slices.first() {
-            for image in first_mip {
+        self.loaded_textures.reserve_exact(asset.slices.len());
+        for mip in &asset.slices {
+            let mut texture_ids = Vec::with_capacity(mip.len());
+            for image in mip {
                 let handle = images.add(image.clone());
                 texture_ids.push(egui_textures.add_image(handle));
             }
+            let size = mip.first().map(|m| m.texture_descriptor.size).unwrap_or_default();
+            self.loaded_textures.push(LoadedTexture {
+                texture_ids,
+                width: size.width,
+                height: size.height,
+            });
         }
-        self.loaded_texture = Some(LoadedTexture { texture_ids });
     }
 
     fn ui(
@@ -69,7 +91,6 @@ impl SystemTab for TextureTab {
             }
         };
 
-        let loaded = self.loaded_texture.as_mut().unwrap();
         if let Some(txtr) = textures.get(&self.handle) {
             ui.label(format!("Type: {}", txtr.inner.head.kind));
             ui.label(format!("Format: {}", txtr.inner.head.format));
@@ -81,33 +102,49 @@ impl SystemTab for TextureTab {
                 txtr.inner.head.mip_sizes.len()
             ));
             ui.checkbox(&mut self.v_flip, "Flip texture vertically");
-            let w = txtr.inner.head.width;
-            let h = txtr.inner.head.height;
+            if self.loaded_textures.len() > 1 {
+                egui::Slider::new(&mut self.selected_mip, 0..=self.loaded_textures.len() - 1)
+                    .text("Mipmap")
+                    .ui(ui);
+            }
+
+            let mip = &self.loaded_textures[self.selected_mip];
+            if self.loaded_textures.len() > 1 {
+                ui.label(format!(
+                    "Mipmap size: {}x{}x{}",
+                    mip.width,
+                    mip.height,
+                    mip.texture_ids.len(),
+                ));
+            }
+            let w = mip.width;
+            let h = mip.height;
             let size = egui::Vec2 { x: w as f32, y: h as f32 };
-            let draw_image = |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32, flip: &bool| {
-                let min = egui::Vec2 { x: (w * x) as f32, y: (h * y) as f32 };
-                let max = egui::Vec2 { x: (w * (x + 1)) as f32, y: (h * (y + 1)) as f32 };
-                let y_range = if *flip {1.0..=0.0} else {0.0..=1.0};
-                egui::widgets::Image::new(loaded.texture_ids[i], size)
-                    .uv(egui::Rect::from_x_y_ranges(0.0..=1.0, y_range))
-                    .paint_at(ui, egui::Rect { min: rect.min + min, max: rect.min + max });
-            };
-            if txtr.inner.head.kind == ETextureType::Cube && loaded.texture_ids.len() == 6 {
+            let draw_image =
+                |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32, flip: bool| {
+                    let min = egui::Vec2 { x: (w * x) as f32, y: (h * y) as f32 };
+                    let max = egui::Vec2 { x: (w * (x + 1)) as f32, y: (h * (y + 1)) as f32 };
+                    let y_range = if flip { 1.0..=0.0 } else { 0.0..=1.0 };
+                    egui::widgets::Image::new(mip.texture_ids[i], size)
+                        .uv(egui::Rect::from_x_y_ranges(0.0..=1.0, y_range))
+                        .paint_at(ui, egui::Rect { min: rect.min + min, max: rect.min + max });
+                };
+            if txtr.inner.head.kind == ETextureType::Cube && mip.texture_ids.len() == 6 {
                 let (_, rect) =
                     ui.allocate_space(egui::Vec2 { x: (w * 4) as f32, y: (h * 3) as f32 });
-                draw_image(ui, &rect, 2, 1, 0, &self.v_flip);
-                draw_image(ui, &rect, 1, 0, 1, &self.v_flip);
-                draw_image(ui, &rect, 4, 1, 1, &self.v_flip);
-                draw_image(ui, &rect, 0, 2, 1, &self.v_flip);
-                draw_image(ui, &rect, 5, 3, 1, &self.v_flip);
-                draw_image(ui, &rect, 3, 1, 2, &self.v_flip);
+                draw_image(ui, &rect, 2, 1, 0, self.v_flip);
+                draw_image(ui, &rect, 1, 0, 1, self.v_flip);
+                draw_image(ui, &rect, 4, 1, 1, self.v_flip);
+                draw_image(ui, &rect, 0, 2, 1, self.v_flip);
+                draw_image(ui, &rect, 5, 3, 1, self.v_flip);
+                draw_image(ui, &rect, 3, 1, 2, self.v_flip);
             } else {
                 let (_, rect) = ui.allocate_space(egui::Vec2 {
-                    x: (w as usize * loaded.texture_ids.len()) as f32,
+                    x: (w as usize * mip.texture_ids.len()) as f32,
                     y: h as f32,
                 });
-                for i in 0..loaded.texture_ids.len() {
-                    draw_image(ui, &rect, i, i as u32, 0, &self.v_flip);
+                for i in 0..mip.texture_ids.len() {
+                    draw_image(ui, &rect, i, i as u32, 0, self.v_flip);
                 }
             }
         }

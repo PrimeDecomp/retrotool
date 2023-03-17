@@ -1,7 +1,7 @@
 use anyhow::Error;
 use bevy::{
-    app::{App, Plugin},
-    asset::{AddAsset, AssetLoader, BoxedFuture, LoadContext},
+    asset::{AssetLoader, BoxedFuture, LoadContext},
+    prelude::{FromWorld, World},
 };
 use binrw::Endian;
 use retrolib::format::{cmdl::ModelData, foot::locate_meta, mtrl::MaterialData};
@@ -14,10 +14,8 @@ pub struct MaterialAsset {
 
 pub struct MaterialAssetLoader;
 
-impl Plugin for MaterialAssetLoader {
-    fn build(&self, app: &mut App) {
-        app.add_asset::<MaterialAsset>().add_asset_loader(MaterialAssetLoader);
-    }
+impl FromWorld for MaterialAssetLoader {
+    fn from_world(_world: &mut World) -> Self { Self }
 }
 
 impl AssetLoader for MaterialAssetLoader {

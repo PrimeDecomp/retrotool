@@ -19,10 +19,8 @@ pub struct ModConAsset {
 
 pub struct ModConAssetLoader;
 
-impl Plugin for ModConAssetLoader {
-    fn build(&self, app: &mut App) {
-        app.add_asset::<ModConAsset>().add_asset_loader(ModConAssetLoader);
-    }
+impl FromWorld for ModConAssetLoader {
+    fn from_world(_world: &mut World) -> Self { Self }
 }
 
 impl AssetLoader for ModConAssetLoader {

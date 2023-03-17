@@ -3,9 +3,10 @@ use std::{
     fmt::{Display, Formatter},
     io::Cursor,
     num::NonZeroUsize,
+    ops::Range,
 };
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use binrw::{binrw, BinReaderExt, Endian};
 use image::{
     DynamicImage, GrayImage, ImageBuffer, Luma, LumaA, Pixel, Rgb, RgbImage, Rgba, Rgba32FImage,
@@ -607,26 +608,66 @@ impl TextureData {
     }
 }
 
-pub fn decompress_images(texture: &TextureData) -> Result<Vec<Vec<DynamicImage>>> {
+#[derive(Debug, Clone)]
+pub struct TextureSlice {
+    pub width: u32,
+    pub height: u32,
+    pub data_range: Range<usize>,
+}
+
+pub fn slice_texture(texture: &TextureData) -> Result<Vec<Vec<TextureSlice>>> {
+    let (bw, bh, bd) = texture.head.format.block_size();
     let mut out = Vec::with_capacity(texture.head.mip_sizes.len());
     let mut w = texture.head.width;
     let mut h = texture.head.height;
+    let mut d = texture.head.layers;
     let mut start = 0usize;
-    for &size in &texture.head.mip_sizes {
-        let mip_data = &texture.data[start..start + size as usize];
-        let mut images = Vec::with_capacity(texture.head.layers as usize);
-        for layer_data in mip_data.chunks_exact(size as usize / texture.head.layers as usize) {
-            images.push(decompress_image(texture.head.format, w, h, layer_data)?);
+    if texture.head.kind == ETextureType::D3 {
+        for &size in &texture.head.mip_sizes {
+            let layer_size = size as usize / d as usize;
+            ensure!(layer_size * d as usize == size as usize);
+            out.push(
+                (start..start + size as usize)
+                    .step_by(layer_size)
+                    .map(|layer_start| TextureSlice {
+                        width: w,
+                        height: h,
+                        data_range: layer_start..layer_start + layer_size,
+                    })
+                    .collect(),
+            );
+            start += size as usize;
+            w = max(w / 2, bw as u32);
+            h = max(h / 2, bh as u32);
+            d = max(d / 2, bd as u32);
         }
-        out.push(images);
-        start += size as usize;
-        w = max(w / 2, 2);
-        h = max(h / 2, 2);
+    } else {
+        out.resize(texture.head.mip_sizes.len(), Vec::<TextureSlice>::with_capacity(d as usize));
+        for _ in 0..d {
+            w = texture.head.width;
+            h = texture.head.height;
+            for (mip_idx, &size) in texture.head.mip_sizes.iter().enumerate() {
+                let layer_size = size as usize / d as usize;
+                out[mip_idx].push(TextureSlice {
+                    width: w,
+                    height: h,
+                    data_range: start..start + layer_size,
+                });
+                start += layer_size;
+                w = max(w / 2, bw as u32);
+                h = max(h / 2, bh as u32);
+            }
+        }
     }
     Ok(out)
 }
 
-fn decompress_image(format: ETextureFormat, w: u32, h: u32, data: &[u8]) -> Result<DynamicImage> {
+pub fn decompress_image(
+    format: ETextureFormat,
+    w: u32,
+    h: u32,
+    data: &[u8],
+) -> Result<DynamicImage> {
     Ok(match format {
         ETextureFormat::R8Unorm => {
             DynamicImage::ImageLuma8(GrayImage::from_raw(w, h, data.to_vec()).ok_or_else(|| {
@@ -715,15 +756,28 @@ fn decompress_image(format: ETextureFormat, w: u32, h: u32, data: &[u8]) -> Resu
         | ETextureFormat::RgbaAstc10x10Srgb
         | ETextureFormat::RgbaAstc12x10Srgb
         | ETextureFormat::RgbaAstc12x12Srgb => {
+            let (bw, bh, _) = format.block_size();
+            let rw = (w + (bw as u32 - 1)) / bw as u32;
+            let rh = (h + (bh as u32 - 1)) / bh as u32;
+            ensure!(data.len() == rw as usize * rh as usize * 16);
             let mut image = RgbaImage::new(w, h);
-            let (bh, bw, _) = format.block_size();
             astc_decode::astc_decode(
                 data,
                 w,
                 h,
-                astc_decode::Footprint::new(bh as u32, bw as u32),
+                astc_decode::Footprint::new(bw as u32, bh as u32),
                 |x, y, z| image.put_pixel(x, y, z.into()),
-            )?;
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to decode ASTC {}x{} (block {}x{}) data size {}",
+                    w,
+                    h,
+                    bw,
+                    bh,
+                    data.len()
+                )
+            })?;
             DynamicImage::ImageRgba8(image)
         }
         ETextureFormat::BptcUfloat | ETextureFormat::BptcSfloat => {

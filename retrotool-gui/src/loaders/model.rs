@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Error;
 use bevy::{
-    app::{App, Plugin},
-    asset::{AddAsset, AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadState, LoadedAsset},
+    asset::{AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadState, LoadedAsset},
     prelude::*,
     utils::HashMap,
 };
@@ -32,10 +31,8 @@ impl ModelAsset {
 
 pub struct ModelAssetLoader;
 
-impl Plugin for ModelAssetLoader {
-    fn build(&self, app: &mut App) {
-        app.add_asset::<ModelAsset>().add_asset_loader(ModelAssetLoader);
-    }
+impl FromWorld for ModelAssetLoader {
+    fn from_world(_world: &mut World) -> Self { Self }
 }
 
 impl AssetLoader for ModelAssetLoader {

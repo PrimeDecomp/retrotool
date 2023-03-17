@@ -21,7 +21,7 @@ use retrolib::{
             EVertexComponent, EVertexDataFormat, ModelData,
         },
         foot::locate_meta,
-        txtr::{decompress_images, TextureData},
+        txtr::{decompress_image, slice_texture, TextureData},
     },
     util::file::map_file,
 };
@@ -534,7 +534,13 @@ fn convert(args: ConvertArgs) -> Result<()> {
                 let txtr_file = map_file(in_dir.join(format!("{}.TXTR", texture.id)))?;
                 let meta = locate_meta(&txtr_file, Endian::Little)?;
                 let txtr = TextureData::slice(&txtr_file, meta, Endian::Little)?;
-                let image = &decompress_images(&txtr)?[0][0];
+                let slice = &slice_texture(&txtr)?[0][0];
+                let image = decompress_image(
+                    txtr.head.format,
+                    slice.width,
+                    slice.height,
+                    &txtr.data[slice.data_range.clone()],
+                )?;
                 let mut f = File::create(out_dir.join(format!("{}.png", texture.id)))?;
                 let mut p = png::Encoder::new(&mut f, image.width(), image.height());
                 if txtr.head.format.is_srgb() {

@@ -111,7 +111,11 @@ impl SystemTab for ProjectTab {
                     self.hover_state = HoverState::Texture {
                         _handle: texture_handle,
                         _image: image_handle,
-                        size: image.texture_descriptor.size,
+                        size: Extent3d {
+                            width: asset.inner.head.width,
+                            height: asset.inner.head.height,
+                            depth_or_array_layers: asset.inner.head.layers,
+                        },
                         texture_id,
                         kind: asset.inner.head.kind,
                         format: asset.inner.head.format,
@@ -215,8 +219,7 @@ impl SystemTab for ProjectTab {
                                 state.open_tab = Some(TabType::Texture(TextureTab {
                                     asset_ref,
                                     handle,
-                                    loaded_texture: None,
-                                    v_flip: false,
+                                    ..default()
                                 }));
                             }
                             K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {

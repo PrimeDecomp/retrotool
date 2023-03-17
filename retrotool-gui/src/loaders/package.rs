@@ -6,10 +6,7 @@ use std::{
 use anyhow::Error;
 use bevy::{
     app::{App, Plugin},
-    asset::{
-        AddAsset, AssetIo, AssetIoError, AssetLoader, BoxedFuture, LoadContext, LoadedAsset,
-        Metadata,
-    },
+    asset::{AssetIo, AssetIoError, AssetLoader, BoxedFuture, LoadContext, LoadedAsset, Metadata},
     prelude::*,
 };
 use binrw::Endian;
@@ -151,10 +148,8 @@ pub struct PackageDirectory {
 
 pub struct PackageAssetLoader;
 
-impl Plugin for PackageAssetLoader {
-    fn build(&self, app: &mut App) {
-        app.add_asset::<PackageDirectory>().add_asset_loader(PackageAssetLoader);
-    }
+impl FromWorld for PackageAssetLoader {
+    fn from_world(_world: &mut World) -> Self { Self }
 }
 
 impl AssetLoader for PackageAssetLoader {

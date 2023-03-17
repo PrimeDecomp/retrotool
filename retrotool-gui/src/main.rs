@@ -22,13 +22,10 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::{
     loaders::{
-        material::MaterialAssetLoader,
-        modcon::ModConAssetLoader,
-        model::{ModelAsset, ModelAssetLoader},
-        package::{
-            package_loader_system, PackageAssetLoader, PackageDirectory, RetroAssetIoPlugin,
-        },
-        texture::{TextureAsset, TextureAssetLoader},
+        model::ModelAsset,
+        package::{PackageDirectory, RetroAssetIoPlugin},
+        texture::TextureAsset,
+        RetroAssetPlugin,
     },
     material::CustomMaterial,
     render::TemporaryLabel,
@@ -76,15 +73,13 @@ fn main() {
                 })
                 .add_before::<AssetPlugin, _>(RetroAssetIoPlugin),
         )
+        // App
+        .add_plugin(RetroAssetPlugin)
+        .add_plugin(MaterialPlugin::<CustomMaterial>::default())
+        .add_plugin(EguiPlugin)
+        // Ray casting
         .add_plugin(DefaultRaycastingPlugin::<ModConRaycastSet>::default())
         .insert_resource(DefaultPluginState::<ModConRaycastSet>::default().with_debug_cursor())
-        .add_plugin(MaterialPlugin::<CustomMaterial>::default())
-        .add_plugin(PackageAssetLoader)
-        .add_plugin(TextureAssetLoader)
-        .add_plugin(ModelAssetLoader)
-        .add_plugin(MaterialAssetLoader)
-        .add_plugin(ModConAssetLoader)
-        .add_plugin(EguiPlugin)
         // Diagnostics
         .add_plugin(FrameTimeDiagnosticsPlugin::default())
         .add_plugin(EntityCountDiagnosticsPlugin::default())
@@ -94,7 +89,6 @@ fn main() {
         .add_startup_system(setup_egui)
         .add_system(file_drop.before(load_files))
         .add_system(load_files)
-        .add_system(package_loader_system.before(ui_system))
         .add_system(bottom_bar_system.before(ui_system))
         .add_system(ui_system)
         .run();
