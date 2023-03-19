@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, num::NonZeroU8, ops::Range};
+use std::{borrow::Cow, ops::Range};
 
 use anyhow::Result;
 use bevy::{
@@ -6,8 +6,6 @@ use bevy::{
     render::{
         mesh::{Indices, MeshVertexAttribute, VertexAttributeValues},
         primitives::Aabb,
-        render_resource::SamplerDescriptor,
-        texture::ImageSampler,
     },
 };
 use bit_set::BitSet;
@@ -16,24 +14,18 @@ use retrolib::{
     array_ref,
     format::{
         cmdl::{
-            CMaterialCache, CMaterialDataInner, EBufferType, EMaterialDataId, EVertexComponent,
-            EVertexDataFormat, ModelData, STextureUsageInfo, SVertexDataComponent,
-        },
-        txtr::{
-            ETextureAnisotropicRatio, ETextureFilter, ETextureMipFilter, ETextureWrap,
-            STextureSamplerData,
+            CMaterialCache, EBufferType, EVertexComponent, EVertexDataFormat, ModelData,
+            SVertexDataComponent,
         },
         CAABox, CTransform4f,
     },
 };
-use uuid::Uuid;
-use wgpu_types::{AddressMode, Face, FilterMode, PrimitiveTopology};
+use wgpu_types::PrimitiveTopology;
 
 use crate::{
-    loaders::{model::ModelAsset, texture::TextureAsset},
+    loaders::model::ModelAsset,
     material::{
-        CustomMaterial, ATTRIBUTE_TANGENT_1, ATTRIBUTE_TANGENT_2, ATTRIBUTE_UV_1, ATTRIBUTE_UV_2,
-        ATTRIBUTE_UV_3,
+        ATTRIBUTE_TANGENT_1, ATTRIBUTE_TANGENT_2, ATTRIBUTE_UV_1, ATTRIBUTE_UV_2, ATTRIBUTE_UV_3,
     },
 };
 
