@@ -216,28 +216,28 @@ impl SystemTab for ProjectTab {
                                     "{}.{}",
                                     entry.id, entry.kind
                                 ));
-                                state.open_tab = Some(TabType::Texture(TextureTab {
+                                state.open_tab = Some(TabType::Texture(Box::new(TextureTab {
                                     asset_ref,
                                     handle,
                                     ..default()
-                                }));
+                                })));
                             }
                             K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {
                                 let handle = server
                                     .load::<ModelAsset, _>(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab = Some(TabType::Model(ModelTab {
+                                state.open_tab = Some(TabType::Model(Box::new(ModelTab {
                                     asset_ref,
                                     handle,
                                     ..default()
-                                }));
+                                })));
                             }
                             K_FORM_MCON => {
                                 let handle = server.load(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab = Some(TabType::ModCon(ModConTab {
+                                state.open_tab = Some(TabType::ModCon(Box::new(ModConTab {
                                     asset_ref,
                                     handle,
                                     ..default()
-                                }));
+                                })));
                             }
                             _ => {}
                         }

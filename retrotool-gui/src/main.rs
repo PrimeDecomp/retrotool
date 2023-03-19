@@ -208,18 +208,18 @@ fn ui_system(world: &mut World) {
                 for tab in tabs {
                     match tab {
                         TabType::Project(tab) => {
-                            load_tab(world, &mut ctx, tab);
+                            load_tab(world, &mut ctx, tab.as_mut());
                         }
                         TabType::Texture(tab) => {
-                            load_tab(world, &mut ctx, tab);
+                            load_tab(world, &mut ctx, tab.as_mut());
                             tab_assets.push(tab.asset_ref);
                         }
                         TabType::Model(tab) => {
-                            load_tab(world, &mut ctx, tab);
+                            load_tab(world, &mut ctx, tab.as_mut());
                             tab_assets.push(tab.asset_ref);
                         }
                         TabType::ModCon(tab) => {
-                            load_tab(world, &mut ctx, tab);
+                            load_tab(world, &mut ctx, tab.as_mut());
                             tab_assets.push(tab.asset_ref);
                         }
                         TabType::Empty => {}

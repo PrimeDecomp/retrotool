@@ -12,7 +12,11 @@ use egui::{Sense, Widget};
 
 use crate::{
     icon,
-    loaders::{modcon::ModConAsset, model::ModelAsset, texture::TextureAsset},
+    loaders::{
+        modcon::ModConAsset,
+        model::{MaterialKey, ModelAsset},
+        texture::TextureAsset,
+    },
     material::CustomMaterial,
     render::{
         camera::ModelCamera,
@@ -175,14 +179,8 @@ impl SystemTab for ModConTab {
                 _ => continue,
             }
 
-            let result = load_model(
-                asset,
-                &mut commands,
-                &texture_assets,
-                &mut images,
-                &mut materials,
-                &mut meshes,
-            );
+            asset.build_texture_images(&texture_assets, &mut images);
+            let result = load_model(asset, &mut meshes);
             let built = match result {
                 Ok(value) => value,
                 Err(e) => {
@@ -202,14 +200,24 @@ impl SystemTab for ModConTab {
                     .with_children(|builder| {
                         for idx in built.lod[0].meshes.iter() {
                             let mesh = &built.meshes[idx];
+                            let material = match asset.material(
+                                &MaterialKey {
+                                    material_idx: mesh.material_idx,
+                                    mesh_flags: mesh.flags,
+                                    mesh_mirrored: is_mirrored,
+                                },
+                                &mut materials,
+                            ) {
+                                Ok(handle) => handle,
+                                Err(e) => {
+                                    log::warn!("Failed to build material: {:?}", e);
+                                    continue;
+                                }
+                            };
                             builder.spawn((
-                                MaterialMeshBundle {
+                                MaterialMeshBundle::<CustomMaterial> {
                                     mesh: mesh.mesh.clone(),
-                                    material: if is_mirrored {
-                                        mesh.mirrored_material.clone()
-                                    } else {
-                                        mesh.material.clone()
-                                    },
+                                    material,
                                     ..default()
                                 },
                                 RaycastMesh::<ModConRaycastSet>::default(),
@@ -305,11 +313,11 @@ impl SystemTab for ModConTab {
                 if ui.button("Open in new tab").clicked() {
                     let handle = server
                         .load(format!("{}.{}", selected.asset_ref.id, selected.asset_ref.kind));
-                    state.open_tab = Some(TabType::Model(ModelTab {
+                    state.open_tab = Some(TabType::Model(Box::new(ModelTab {
                         asset_ref: selected.asset_ref,
                         handle,
                         ..default()
-                    }));
+                    })));
                     ui.close_menu();
                 }
                 if ui.button("Copy GUID").clicked() {

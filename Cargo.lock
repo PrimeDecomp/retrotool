@@ -1575,7 +1575,7 @@ checksum = "e8af5ef47e2ed89d23d0ecbc1b681b30390069de70260937877514377fc24feb"
 dependencies = [
  "bit_field",
  "flume",
- "half",
+ "half 2.2.1",
  "lebe",
  "miniz_oxide",
  "smallvec",
@@ -1846,6 +1846,16 @@ version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02b4af3693f1b705df946e9fe5631932443781d0aabb423b62fcd4d73f6d2fd0"
 dependencies = [
+ "crunchy",
+]
+
+[[package]]
+name = "half"
+version = "3.0.0-dev"
+source = "git+https://github.com/encounter/half-rs?branch=inline#807f00f6b83419b20942ed240f46ceb36d7de162"
+dependencies = [
+ "bytemuck",
+ "cfg-if",
  "crunchy",
 ]
 
@@ -2844,7 +2854,7 @@ dependencies = [
  "ddsfile",
  "env_logger",
  "gltf-json",
- "half",
+ "half 3.0.0-dev",
  "image",
  "log",
  "memmap2",
@@ -2870,7 +2880,7 @@ dependencies = [
  "bytemuck",
  "egui",
  "egui_dock",
- "half",
+ "half 3.0.0-dev",
  "image",
  "log",
  "num-traits",

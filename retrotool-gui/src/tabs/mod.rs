@@ -9,10 +9,10 @@ use bevy_egui::EguiContext;
 use crate::AssetRef;
 
 pub enum TabType {
-    Project(project::ProjectTab),
-    Texture(texture::TextureTab),
-    Model(model::ModelTab),
-    ModCon(modcon::ModConTab),
+    Project(Box<project::ProjectTab>),
+    Texture(Box<texture::TextureTab>),
+    Model(Box<model::ModelTab>),
+    ModCon(Box<modcon::ModConTab>),
     Empty,
 }
 
@@ -78,10 +78,10 @@ impl egui_dock::TabViewer for TabViewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
-            TabType::Project(tab) => render_tab(self.world, ui, tab, &mut self.state),
-            TabType::Texture(tab) => render_tab(self.world, ui, tab, &mut self.state),
-            TabType::Model(tab) => render_tab(self.world, ui, tab, &mut self.state),
-            TabType::ModCon(tab) => render_tab(self.world, ui, tab, &mut self.state),
+            TabType::Project(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
+            TabType::Texture(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
+            TabType::Model(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
+            TabType::ModCon(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
             TabType::Empty => {}
         }
     }
@@ -100,15 +100,15 @@ impl egui_dock::TabViewer for TabViewer<'_> {
         match tab {
             TabType::Project(_) => false,
             TabType::Texture(tab) => {
-                close_tab(self.world, tab);
+                close_tab(self.world, tab.as_mut());
                 true
             }
             TabType::Model(tab) => {
-                close_tab(self.world, tab);
+                close_tab(self.world, tab.as_mut());
                 true
             }
             TabType::ModCon(tab) => {
-                close_tab(self.world, tab);
+                close_tab(self.world, tab.as_mut());
                 true
             }
             TabType::Empty => false,

@@ -11,32 +11,40 @@ use bevy::{
     },
 };
 use bit_set::BitSet;
-use half::f16;
-use retrolib::format::{
-    cmdl::{
-        CMaterialDataInner, EBufferType, EMaterialDataId, EVertexComponent, EVertexDataFormat,
-        ModelData, STextureUsageInfo, SVertexDataComponent,
+use half::prelude::*;
+use retrolib::{
+    array_ref,
+    format::{
+        cmdl::{
+            CMaterialCache, CMaterialDataInner, EBufferType, EMaterialDataId, EVertexComponent,
+            EVertexDataFormat, ModelData, STextureUsageInfo, SVertexDataComponent,
+        },
+        txtr::{
+            ETextureAnisotropicRatio, ETextureFilter, ETextureMipFilter, ETextureWrap,
+            STextureSamplerData,
+        },
+        CAABox, CTransform4f,
     },
-    txtr::{
-        ETextureAnisotropicRatio, ETextureFilter, ETextureMipFilter, ETextureWrap,
-        STextureSamplerData,
-    },
-    CAABox, CTransform4f,
 };
 use uuid::Uuid;
 use wgpu_types::{AddressMode, Face, FilterMode, PrimitiveTopology};
 
 use crate::{
     loaders::{model::ModelAsset, texture::TextureAsset},
-    material::CustomMaterial,
+    material::{
+        CustomMaterial, ATTRIBUTE_TANGENT_1, ATTRIBUTE_TANGENT_2, ATTRIBUTE_UV_1, ATTRIBUTE_UV_2,
+        ATTRIBUTE_UV_3,
+    },
 };
+
+pub const MESH_FLAG_OPAQUE: u16 = 1;
 
 pub struct BuiltMesh {
     pub mesh: Handle<Mesh>,
-    pub material: Handle<CustomMaterial>,
-    pub mirrored_material: Handle<CustomMaterial>,
-    pub material_name: String,
+    pub material_idx: usize,
     pub visible: bool,
+    pub flags: u16,
+    pub unk_e: u16,
 }
 
 pub struct ModelLod {
@@ -47,69 +55,15 @@ pub struct ModelLod {
 pub struct BuiltModel {
     pub meshes: Vec<BuiltMesh>,
     pub lod: Vec<ModelLod>,
+    pub materials: Vec<CMaterialCache>,
     pub aabb: Aabb,
 }
 
-pub fn load_model(
-    asset: &ModelAsset,
-    _commands: &mut Commands,
-    // server: &AssetServer,
-    texture_assets: &Assets<TextureAsset>,
-    images: &mut Assets<Image>,
-    materials: &mut Assets<CustomMaterial>,
-    meshes: &mut Assets<Mesh>,
-    // center: bool,
-) -> Result<BuiltModel> {
+pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<BuiltModel> {
     let ModelAsset {
         inner: ModelData { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers },
-        textures,
         ..
     } = asset;
-
-    // Build sampler descriptors
-    let mut sampler_descriptors = HashMap::<Uuid, SamplerDescriptor>::new();
-    for mat in &mtrl.materials {
-        for data in &mat.data {
-            match &data.data {
-                CMaterialDataInner::Texture(texture) => {
-                    if let Some(usage) = &texture.usage {
-                        let sampler_data = textures
-                            .get(&texture.id)
-                            .and_then(|handle| texture_assets.get(handle))
-                            .map(|txtr| &txtr.inner.head.sampler_data);
-                        sampler_descriptors
-                            .insert(texture.id, sampler_descriptor_from_usage(usage, sampler_data));
-                    }
-                }
-                CMaterialDataInner::LayeredTexture(layers) => {
-                    for texture in &layers.textures {
-                        if let Some(usage) = &texture.usage {
-                            let sampler_data = textures
-                                .get(&texture.id)
-                                .and_then(|handle| texture_assets.get(handle))
-                                .map(|txtr| &txtr.inner.head.sampler_data);
-                            sampler_descriptors.insert(
-                                texture.id,
-                                sampler_descriptor_from_usage(usage, sampler_data),
-                            );
-                        }
-                    }
-                }
-                _ => continue,
-            }
-        }
-    }
-
-    // Build texture images
-    let mut texture_handles = HashMap::<Uuid, Handle<Image>>::new();
-    for (id, handle) in textures {
-        let asset = texture_assets.get(handle).unwrap();
-        let mut image = asset.texture.clone();
-        if let Some(desc) = sampler_descriptors.get(id) {
-            image.sampler_descriptor = ImageSampler::Descriptor(desc.clone());
-        }
-        texture_handles.insert(*id, images.add(image));
-    }
 
     // Build vertex buffers
     let mut buf_infos: Vec<VertexBufferInfo> = Vec::with_capacity(vtx_buffers.len());
@@ -141,168 +95,6 @@ pub fn load_model(
         index_buffers.push(out);
     }
 
-    // Build materials
-    let mut material_handles = Vec::with_capacity(mtrl.materials.len());
-    let mut material_handles_mirrored = Vec::with_capacity(mtrl.materials.len());
-    for mat in &mtrl.materials {
-        let mut out_mat = CustomMaterial::default();
-        // log::info!("Shader {}, unk {}", mat.shader_id, mat.unk_guid);
-        for data in &mat.data {
-            match data.data_id {
-                EMaterialDataId::DIFT | EMaterialDataId::BCLR => match &data.data {
-                    CMaterialDataInner::Texture(texture) => {
-                        out_mat.base_color_l0 = Color::WHITE;
-                        out_mat.base_color_texture_0 = texture_handles.get(&texture.id).cloned();
-                        out_mat.base_color_uv_0 =
-                            texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
-                    }
-                    _ => {
-                        log::warn!("Unsupported material data type for DIFT {:?}", data.data_type);
-                    }
-                },
-                EMaterialDataId::BCRL => match &data.data {
-                    CMaterialDataInner::LayeredTexture(layers) => {
-                        out_mat.base_color_l0 = layers.base.colors[0].to_array().into();
-                        out_mat.base_color_l1 = layers.base.colors[1].to_array().into();
-                        out_mat.base_color_l2 = layers.base.colors[2].to_array().into();
-                        out_mat.base_color_texture_0 =
-                            texture_handles.get(&layers.textures[0].id).cloned();
-                        out_mat.base_color_texture_1 =
-                            texture_handles.get(&layers.textures[1].id).cloned();
-                        out_mat.base_color_texture_2 =
-                            texture_handles.get(&layers.textures[2].id).cloned();
-                        out_mat.base_color_uv_0 = layers.textures[0]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                        out_mat.base_color_uv_1 = layers.textures[1]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                        out_mat.base_color_uv_2 = layers.textures[2]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                    }
-                    _ => {
-                        log::warn!("Unsupported material data type for BCRL {:?}", data.data_type);
-                    }
-                },
-                EMaterialDataId::DIFC => match &data.data {
-                    CMaterialDataInner::Color(color) => {
-                        out_mat.base_color = Color::rgba(color.r, color.g, color.b, color.a);
-                    }
-                    _ => log::warn!("Unsupported material data type for DIFC {:?}", data.data_type),
-                },
-                EMaterialDataId::ICAN => match &data.data {
-                    CMaterialDataInner::Texture(texture) => {
-                        out_mat.emissive_texture = texture_handles.get(&texture.id).cloned();
-                        out_mat.emissive_uv =
-                            texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
-                    }
-                    _ => log::warn!("Unsupported material data type for ICAN {:?}", data.data_type),
-                },
-                EMaterialDataId::ICNC => match &data.data {
-                    CMaterialDataInner::Color(color) => {
-                        out_mat.emissive_color = Color::rgba(color.r, color.g, color.b, color.a);
-                    }
-                    _ => log::warn!("Unsupported material data type for ICNC {:?}", data.data_type),
-                },
-                EMaterialDataId::NMAP => match &data.data {
-                    CMaterialDataInner::Texture(texture) => {
-                        out_mat.normal_map_l0 = Color::WHITE;
-                        out_mat.normal_map_texture_0 = texture_handles.get(&texture.id).cloned();
-                        out_mat.normal_map_uv_0 = texture.usage.as_ref().unwrap().tex_coord;
-                    }
-                    _ => {
-                        log::warn!("Unsupported material data type for NMAP {:?}", data.data_type);
-                    }
-                },
-                EMaterialDataId::NRML => match &data.data {
-                    CMaterialDataInner::LayeredTexture(layers) => {
-                        out_mat.normal_map_l0 = layers.base.colors[0].to_array().into();
-                        out_mat.normal_map_l1 = layers.base.colors[1].to_array().into();
-                        out_mat.normal_map_l2 = layers.base.colors[2].to_array().into();
-                        out_mat.normal_map_texture_0 =
-                            texture_handles.get(&layers.textures[0].id).cloned();
-                        out_mat.normal_map_texture_1 =
-                            texture_handles.get(&layers.textures[1].id).cloned();
-                        out_mat.normal_map_texture_2 =
-                            texture_handles.get(&layers.textures[2].id).cloned();
-                        out_mat.normal_map_uv_0 = layers.textures[0]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                        out_mat.normal_map_uv_1 = layers.textures[1]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                        out_mat.normal_map_uv_2 = layers.textures[2]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                    }
-                    _ => {
-                        log::warn!("Unsupported material data type for NRML {:?}", data.data_type);
-                    }
-                },
-                EMaterialDataId::METL => match &data.data {
-                    CMaterialDataInner::Texture(texture) => {
-                        out_mat.metallic_map_l0 = Color::WHITE;
-                        out_mat.metallic_map_texture_0 = texture_handles.get(&texture.id).cloned();
-                        out_mat.metallic_map_uv_0 = texture.usage.as_ref().unwrap().tex_coord;
-                    }
-                    _ => {
-                        log::warn!("Unsupported material data type for METL {:?}", data.data_type);
-                    }
-                },
-                EMaterialDataId::MTLL => match &data.data {
-                    CMaterialDataInner::LayeredTexture(layers) => {
-                        out_mat.metallic_map_l0 = layers.base.colors[0].to_array().into();
-                        out_mat.metallic_map_l1 = layers.base.colors[1].to_array().into();
-                        out_mat.metallic_map_l2 = layers.base.colors[2].to_array().into();
-                        out_mat.metallic_map_texture_0 =
-                            texture_handles.get(&layers.textures[0].id).cloned();
-                        out_mat.metallic_map_texture_1 =
-                            texture_handles.get(&layers.textures[1].id).cloned();
-                        out_mat.metallic_map_texture_2 =
-                            texture_handles.get(&layers.textures[2].id).cloned();
-                        out_mat.metallic_map_uv_0 = layers.textures[0]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                        out_mat.metallic_map_uv_1 = layers.textures[1]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                        out_mat.metallic_map_uv_2 = layers.textures[2]
-                            .usage
-                            .as_ref()
-                            .map(|u| u.tex_coord)
-                            .unwrap_or_default();
-                    }
-                    _ => {
-                        log::warn!("Unsupported material data type for MTLL {:?}", data.data_type);
-                    }
-                },
-                id => {
-                    log::warn!("Unsupported material data ID {id:?}");
-                }
-            }
-        }
-        material_handles.push(materials.add(out_mat.clone()));
-        out_mat.cull_mode = Some(Face::Front);
-        material_handles_mirrored.push(materials.add(out_mat));
-    }
-
     // Process meshes
     let aabb = Aabb::from_min_max(
         Vec3::new(head.bounds.min.x, head.bounds.min.y, head.bounds.min.z),
@@ -330,10 +122,10 @@ pub fn load_model(
         }
         out_meshes.push(BuiltMesh {
             mesh: meshes.add(out_mesh),
-            material: material_handles[in_mesh.material_idx as usize].clone(),
-            mirrored_material: material_handles_mirrored[in_mesh.material_idx as usize].clone(),
-            material_name: mtrl.materials[in_mesh.material_idx as usize].name.clone(),
+            material_idx: in_mesh.material_idx as usize,
             visible: true,
+            flags: in_mesh.unk_c,
+            unk_e: in_mesh.unk_e,
         });
     }
 
@@ -348,7 +140,7 @@ pub fn load_model(
         lod.push(ModelLod { meshes: visible, distance: mesh.lod_rules.get(idx).map(|r| r.value) });
     }
 
-    Ok(BuiltModel { meshes: out_meshes, lod, aabb })
+    Ok(BuiltModel { meshes: out_meshes, lod, materials: mtrl.materials.clone(), aabb })
 }
 
 pub fn convert_aabb(aabb: &CAABox) -> Aabb {
@@ -397,6 +189,18 @@ where
     out
 }
 
+trait HalfArray<const N: usize> {
+    fn to_f32_array(self) -> [f32; N];
+}
+
+impl<const N: usize> HalfArray<N> for [u16; N] {
+    fn to_f32_array(self) -> [f32; N] {
+        let mut dst = [0f32; N];
+        self.reinterpret_cast::<f16>().convert_to_f32_slice(&mut dst);
+        dst
+    }
+}
+
 fn convert_component(
     input: &[u8],
     component: &SVertexDataComponent,
@@ -408,11 +212,19 @@ fn convert_component(
         Position => Mesh::ATTRIBUTE_POSITION,
         Normal => Mesh::ATTRIBUTE_NORMAL,
         Tangent0 => Mesh::ATTRIBUTE_TANGENT,
+        Tangent1 => ATTRIBUTE_TANGENT_1,
+        Tangent2 => ATTRIBUTE_TANGENT_2,
         TexCoord0 => Mesh::ATTRIBUTE_UV_0,
+        TexCoord1 => ATTRIBUTE_UV_1,
+        TexCoord2 => ATTRIBUTE_UV_2,
+        TexCoord3 => ATTRIBUTE_UV_3,
         Color => Mesh::ATTRIBUTE_COLOR,
         // BoneIndices => Mesh::ATTRIBUTE_JOINT_INDEX,
         // BoneWeights => Mesh::ATTRIBUTE_JOINT_WEIGHT,
-        _ => return None,
+        _ => {
+            log::info!("Skipping attribute {:?}", component.component);
+            return None;
+        }
     };
     let values = match component.format {
         Rg8Unorm => Unorm8x2(copy_direct(input, component)),
@@ -426,9 +238,7 @@ fn convert_component(
         Rg16Uint => Uint16x2(copy_direct(input, component)),
         Rg16Snorm => Snorm16x2(copy_direct(input, component)),
         Rg16Sint => Sint16x2(copy_direct(input, component)),
-        Rg16Float => Float32x2(copy_converting(input, component, |v: [u16; 2]| {
-            v.map(|u| f16::from_bits(u).to_f32())
-        })),
+        Rg16Float => Float32x2(copy_converting(input, component, |v: [u16; 2]| v.to_f32_array())),
         Rgba8Unorm => match component.component {
             Color => Float32x4(copy_converting(input, component, |v: [u8; 4]| {
                 v.map(|u| u as f32 * 255.0)
@@ -446,15 +256,23 @@ fn convert_component(
         Rgba16Snorm => Snorm16x4(copy_direct(input, component)),
         Rgba16Sint => Sint16x4(copy_direct(input, component)),
         Rgba16Float => match component.component {
-            Position | Normal => Float32x3(copy_converting(input, component, |v: [u16; 3]| {
-                v.map(|u| f16::from_bits(u).to_f32())
+            Position | Normal => Float32x3(copy_converting(input, component, |v: [u16; 4]| {
+                debug_assert_eq!(v[3], 1);
+                *array_ref!(v.to_f32_array(), 0, 3)
             })),
-            TexCoord0 => Float32x2(copy_converting(input, component, |v: [u16; 2]| {
-                v.map(|u| f16::from_bits(u).to_f32())
-            })),
-            _ => Float32x4(copy_converting(input, component, |v: [u16; 4]| {
-                v.map(|u| f16::from_bits(u).to_f32())
-            })),
+            TexCoord0 | TexCoord1 | TexCoord2 | TexCoord3 => {
+                Float32x2(copy_converting(input, component, |v: [u16; 4]| {
+                    let dst = v.to_f32_array();
+                    if component.component == TexCoord1 {
+                        // println!("UV 1: {:?}", values);
+                        // ???
+                        *array_ref!(dst, 2, 2)
+                    } else {
+                        *array_ref!(dst, 0, 2)
+                    }
+                }))
+            }
+            _ => Float32x4(copy_converting(input, component, |v: [u16; 4]| v.to_f32_array())),
         },
         Rgb32Uint => Uint32x3(copy_direct(input, component)),
         Rgb32Sint => Sint32x3(copy_direct(input, component)),
@@ -463,7 +281,9 @@ fn convert_component(
         Rgba32Sint => Sint32x4(copy_direct(input, component)),
         Rgba32Float => match component.component {
             Position | Normal => Float32x3(copy_direct(input, component)),
-            TexCoord0 => Float32x2(copy_direct(input, component)),
+            TexCoord0 | TexCoord1 | TexCoord2 | TexCoord3 => {
+                Float32x2(copy_direct(input, component))
+            }
             _ => Float32x4(copy_direct(input, component)),
         },
         R16Uint => Uint32(copy_converting(input, component, |v: u16| v as u32)),
@@ -531,92 +351,4 @@ where T: num_traits::Num + num_traits::Bounded + Copy + PartialOrd + TryInto<usi
 enum IndicesSlice<'a> {
     U16(Cow<'a, [u16]>),
     U32(Cow<'a, [u32]>),
-}
-
-fn texture_wrap(wrap: ETextureWrap) -> AddressMode {
-    match wrap {
-        ETextureWrap::ClampToEdge => AddressMode::ClampToEdge,
-        ETextureWrap::Repeat => AddressMode::Repeat,
-        ETextureWrap::MirroredRepeat => AddressMode::MirrorRepeat,
-        ETextureWrap::MirrorClamp => todo!("Mirror clamp"),
-        ETextureWrap::ClampToBorder => AddressMode::ClampToBorder,
-        ETextureWrap::Clamp => todo!("Clamp"),
-    }
-}
-
-fn sampler_descriptor_from_usage<'a>(
-    usage: &STextureUsageInfo,
-    data: Option<&STextureSamplerData>,
-) -> SamplerDescriptor<'a> {
-    SamplerDescriptor {
-        label: None,
-        address_mode_u: match usage.wrap_x {
-            0 => AddressMode::ClampToEdge,
-            1 => AddressMode::Repeat,
-            2 => AddressMode::MirrorRepeat,
-            3 => todo!("Mirror clamp"),
-            4 => AddressMode::ClampToBorder,
-            5 => todo!("Clamp"),
-            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_x)),
-            n => todo!("wrap {n}"),
-        },
-        address_mode_v: match usage.wrap_y {
-            0 => AddressMode::ClampToEdge,
-            1 => AddressMode::Repeat,
-            2 => AddressMode::MirrorRepeat,
-            3 => todo!("Mirror clamp"),
-            4 => AddressMode::ClampToBorder,
-            5 => todo!("Clamp"),
-            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_y)),
-            n => todo!("wrap {n}"),
-        },
-        address_mode_w: match usage.wrap_z {
-            0 => AddressMode::ClampToEdge,
-            1 => AddressMode::Repeat,
-            2 => AddressMode::MirrorRepeat,
-            3 => todo!("Mirror clamp"),
-            4 => AddressMode::ClampToBorder,
-            5 => todo!("Clamp"),
-            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_z)),
-            n => todo!("wrap {n}"),
-        },
-        mag_filter: match usage.filter {
-            0 => FilterMode::Nearest,
-            1 => FilterMode::Linear,
-            u32::MAX => data.map_or(FilterMode::Nearest, |d| match d.filter {
-                ETextureFilter::Nearest => FilterMode::Nearest,
-                ETextureFilter::Linear => FilterMode::Linear,
-            }),
-            n => todo!("Filter {n}"),
-        },
-        min_filter: match usage.filter {
-            0 => FilterMode::Nearest,
-            1 => FilterMode::Linear,
-            u32::MAX => data.map_or(FilterMode::Nearest, |d| match d.filter {
-                ETextureFilter::Nearest => FilterMode::Nearest,
-                ETextureFilter::Linear => FilterMode::Linear,
-            }),
-            n => todo!("Filter {n}"),
-        },
-        mipmap_filter: data.map_or(FilterMode::Nearest, |d| match d.mip_filter {
-            ETextureMipFilter::Nearest => FilterMode::Nearest,
-            ETextureMipFilter::Linear => FilterMode::Linear,
-        }),
-        lod_min_clamp: 0.0,
-        lod_max_clamp: f32::MAX,
-        compare: None,
-        anisotropy_clamp: NonZeroU8::new(
-            data.map(|d| match d.aniso {
-                ETextureAnisotropicRatio::None => 0,
-                ETextureAnisotropicRatio::Ratio1 => 1,
-                ETextureAnisotropicRatio::Ratio2 => 2,
-                ETextureAnisotropicRatio::Ratio4 => 4,
-                ETextureAnisotropicRatio::Ratio8 => 8,
-                ETextureAnisotropicRatio::Ratio16 => 16,
-            })
-            .unwrap_or_default(),
-        ),
-        // anisotropy_clamp: NonZeroU8::new(8),
-        border_color: None,
-    }
 }

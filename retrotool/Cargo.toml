@@ -10,6 +10,10 @@ repository = "https://github.com/PrimeDecomp/retrotool"
 readme = "README.md"
 categories = ["command-line-utilities"]
 
+[features]
+default = []
+nightly = ["half/use-intrinsics"]
+
 [dependencies]
 anyhow = "1.0.69"
 argh = "0.1.10"
@@ -18,7 +22,7 @@ binrw_derive = "0.11.1"
 ddsfile = { git = "https://github.com/encounter/ddsfile", rev = "880f04c1dffa680eab0e9e09cfa58591fe186a31" }
 env_logger = "0.10.0"
 gltf-json = { version = "1.1.0", features = ["names", "extras"] }
-half = "2.2.1"
+half = { git = "https://github.com/encounter/half-rs", branch = "inline" }
 image = "0.24.5"
 log = "0.4.17"
 memmap2 = "0.5.8"

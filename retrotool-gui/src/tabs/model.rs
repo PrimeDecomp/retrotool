@@ -7,10 +7,14 @@ use bevy::{
 };
 use bevy_egui::EguiContext;
 use egui::{Sense, Widget};
+use retrolib::format::cmdl::CMaterialCache;
 
 use crate::{
     icon,
-    loaders::{model::ModelAsset, texture::TextureAsset},
+    loaders::{
+        model::{MaterialKey, ModelAsset},
+        texture::TextureAsset,
+    },
     material::CustomMaterial,
     render::{
         camera::ModelCamera,
@@ -23,13 +27,16 @@ use crate::{
 
 pub struct LoadedMesh {
     pub entity: Entity,
-    pub material_name: String,
+    pub material_idx: usize,
     pub visible: bool,
+    pub unk_c: u16,
+    pub unk_e: u16,
 }
 
 pub struct LoadedModel {
     pub meshes: Vec<LoadedMesh>,
     pub lod: Vec<ModelLod>,
+    pub materials: Vec<CMaterialCache>,
 }
 
 #[derive(Default)]
@@ -99,14 +106,8 @@ impl SystemTab for ModelTab {
             _ => return,
         }
 
-        let result = load_model(
-            asset,
-            &mut commands,
-            &texture_assets,
-            &mut images,
-            &mut materials,
-            &mut meshes,
-        );
+        asset.build_texture_images(&texture_assets, &mut images);
+        let result = load_model(asset, &mut meshes);
         let built = match result {
             Ok(value) => value,
             Err(e) => {
@@ -114,25 +115,39 @@ impl SystemTab for ModelTab {
                 return;
             }
         };
-        self.loaded = Some(LoadedModel {
-            meshes: built
-                .meshes
-                .into_iter()
-                .map(|mesh| LoadedMesh {
-                    entity: commands
-                        .spawn(MaterialMeshBundle {
-                            mesh: mesh.mesh,
-                            material: mesh.material,
-                            transform: Transform::from_translation((-built.aabb.center).into()),
-                            ..default()
-                        })
-                        .id(),
-                    material_name: mesh.material_name,
-                    visible: mesh.visible,
+        let mut meshes = Vec::with_capacity(built.meshes.len());
+        for mesh in built.meshes {
+            let material = match asset.material(
+                &MaterialKey {
+                    material_idx: mesh.material_idx,
+                    mesh_flags: mesh.flags,
+                    mesh_mirrored: false,
+                },
+                &mut materials,
+            ) {
+                Ok(handle) => handle,
+                Err(e) => {
+                    log::warn!("Failed to build material: {:?}", e);
+                    continue;
+                }
+            };
+            let entity = commands
+                .spawn(MaterialMeshBundle::<CustomMaterial> {
+                    mesh: mesh.mesh,
+                    material,
+                    transform: Transform::from_translation((-built.aabb.center).into()),
+                    ..default()
                 })
-                .collect(),
-            lod: built.lod,
-        });
+                .id();
+            meshes.push(LoadedMesh {
+                entity,
+                material_idx: mesh.material_idx,
+                visible: mesh.visible,
+                unk_c: mesh.flags,
+                unk_e: mesh.unk_e,
+            });
+        }
+        self.loaded = Some(LoadedModel { meshes, lod: built.lod, materials: built.materials });
         self.camera.init(&convert_aabb(&asset.inner.head.bounds), false);
         self.diffuse_map = server.load("papermill_diffuse_rgb9e5_zstd.ktx2");
         self.specular_map = server.load("papermill_specular_rgb9e5_zstd.ktx2");
@@ -160,8 +175,8 @@ impl SystemTab for ModelTab {
         let left_top = rect.left_top().to_vec2() * scale;
         let size = rect.size() * scale;
         let viewport = Viewport {
-            physical_position: UVec2 { x: left_top.x as u32, y: left_top.y as u32 },
-            physical_size: UVec2 { x: size.x as u32, y: size.y as u32 },
+            physical_position: UVec2::new(left_top.x as u32, left_top.y as u32),
+            physical_size: UVec2::new(size.x as u32, size.y as u32),
             depth: 0.0..1.0,
         };
         let response =
@@ -226,7 +241,10 @@ impl SystemTab for ModelTab {
                         let mesh = &mut loaded.meshes[idx];
                         ui.checkbox(
                             &mut mesh.visible,
-                            format!("Mesh {idx} ({})", mesh.material_name),
+                            format!(
+                                "Mesh {idx} ({}, {}, {})",
+                                mesh.unk_c, mesh.unk_e, loaded.materials[mesh.material_idx].name
+                            ),
                         );
                         if let Some(mut commands) = commands.get_entity(mesh.entity) {
                             commands.insert((

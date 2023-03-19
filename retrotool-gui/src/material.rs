@@ -7,15 +7,15 @@ use bevy::{
 
 // A "high" random id should be used for custom attributes to ensure consistent sorting and avoid collisions with other attributes.
 // See the MeshVertexAttribute docs for more info.
-const ATTRIBUTE_UV_1: MeshVertexAttribute =
+pub const ATTRIBUTE_UV_1: MeshVertexAttribute =
     MeshVertexAttribute::new("Vertex_Uv_1", 988540917, VertexFormat::Float32x2);
-const ATTRIBUTE_UV_2: MeshVertexAttribute =
+pub const ATTRIBUTE_UV_2: MeshVertexAttribute =
     MeshVertexAttribute::new("Vertex_Uv_2", 988540918, VertexFormat::Float32x2);
-const ATTRIBUTE_UV_3: MeshVertexAttribute =
+pub const ATTRIBUTE_UV_3: MeshVertexAttribute =
     MeshVertexAttribute::new("Vertex_Uv_3", 988540919, VertexFormat::Float32x2);
-const ATTRIBUTE_TANGENT_1: MeshVertexAttribute =
+pub const ATTRIBUTE_TANGENT_1: MeshVertexAttribute =
     MeshVertexAttribute::new("Vertex_Tangent_1", 988540920, VertexFormat::Float32x4);
-const ATTRIBUTE_TANGENT_2: MeshVertexAttribute =
+pub const ATTRIBUTE_TANGENT_2: MeshVertexAttribute =
     MeshVertexAttribute::new("Vertex_Tangent_2", 988540921, VertexFormat::Float32x4);
 
 // This is the struct that will be passed to your shader
@@ -26,6 +26,8 @@ const ATTRIBUTE_TANGENT_2: MeshVertexAttribute =
 pub struct CustomMaterial {
     #[reflect(ignore)]
     pub cull_mode: Option<Face>,
+    #[reflect(ignore)]
+    pub alpha_mode: AlphaMode,
     #[uniform(0)]
     pub base_color: Color,
     #[texture(1)]
@@ -49,8 +51,6 @@ pub struct CustomMaterial {
     pub base_color_l1: Color,
     #[uniform(0)]
     pub base_color_l2: Color,
-    // pub ican_color: Color,
-    // pub ican_unmasked_color: Color,
     #[texture(7)]
     #[sampler(8)]
     pub normal_map_texture_0: Option<Handle<Image>>,
@@ -106,6 +106,7 @@ impl Default for CustomMaterial {
     fn default() -> Self {
         Self {
             cull_mode: Some(Face::Back),
+            alpha_mode: AlphaMode::Opaque,
             base_color: Color::WHITE,
             base_color_texture_0: None,
             base_color_texture_1: None,
@@ -136,7 +137,7 @@ impl Default for CustomMaterial {
             metallic_map_l2: Color::NONE,
             emissive_texture: None,
             emissive_uv: 0,
-            emissive_color: Color::BLACK,
+            emissive_color: Color::NONE,
         }
     }
 }
@@ -154,6 +155,9 @@ impl Material for CustomMaterial {
     fn vertex_shader() -> ShaderRef { "custom_material.wgsl".into() }
 
     fn fragment_shader() -> ShaderRef { "custom_material.wgsl".into() }
+
+    #[inline]
+    fn alpha_mode(&self) -> AlphaMode { self.alpha_mode }
 
     fn specialize(
         _pipeline: &MaterialPipeline<Self>,
