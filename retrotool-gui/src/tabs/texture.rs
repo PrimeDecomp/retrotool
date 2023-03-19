@@ -35,6 +35,43 @@ impl Default for TextureTab {
     }
 }
 
+pub struct UiTexture {
+    _image: Handle<Image>,
+    texture_id: egui::TextureId,
+    width: u32,
+    height: u32,
+}
+
+impl UiTexture {
+    pub fn new(
+        image: Image,
+        images: &mut Assets<Image>,
+        egui_textures: &mut EguiUserTextures,
+    ) -> Self {
+        let width = image.texture_descriptor.size.width;
+        let height = image.texture_descriptor.size.height;
+        let handle = images.add(image);
+        let weak_handle = handle.clone_weak();
+        Self { _image: handle, texture_id: egui_textures.add_image(weak_handle), width, height }
+    }
+
+    #[allow(dead_code)]
+    pub fn image(&self) -> egui::Image {
+        egui::Image::new(self.texture_id, egui::Vec2::new(self.width as f32, self.height as f32))
+    }
+
+    pub fn image_scaled(&self, max_size: f32) -> egui::Image {
+        let size = if self.height > self.width {
+            let ratio = max_size / self.height as f32;
+            egui::Vec2::new(self.width as f32 * ratio, max_size)
+        } else {
+            let ratio = max_size / self.width as f32;
+            egui::Vec2::new(max_size, self.height as f32 * ratio)
+        };
+        egui::Image::new(self.texture_id, size)
+    }
+}
+
 impl SystemTab for TextureTab {
     type LoadParam =
         (SRes<Assets<TextureAsset>>, SResMut<Assets<Image>>, SResMut<EguiUserTextures>);

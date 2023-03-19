@@ -488,13 +488,13 @@ fn convert(args: ConvertArgs) -> Result<()> {
                 mag_filter: match usage.filter {
                     0 => Some(Valid(json::texture::MagFilter::Nearest)),
                     1 => Some(Valid(json::texture::MagFilter::Linear)),
-                    u32::MAX => None,
+                    -1 => None,
                     filter => todo!("Filter {filter}"),
                 },
                 min_filter: match usage.filter {
                     0 => Some(Valid(json::texture::MinFilter::Nearest)),
                     1 => Some(Valid(json::texture::MinFilter::Linear)),
-                    u32::MAX => None,
+                    -1 => None,
                     filter => todo!("Filter {filter}"),
                 },
                 name: Some(format!("{} sampler", texture.id)),

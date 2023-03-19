@@ -457,10 +457,10 @@ pub struct CLayeredTextureData {
 #[derive(Clone, Debug)]
 pub struct STextureUsageInfo {
     pub tex_coord: u32,
-    pub filter: u32,
-    pub wrap_x: u32,
-    pub wrap_y: u32,
-    pub wrap_z: u32,
+    pub filter: i32,
+    pub wrap_x: i32,
+    pub wrap_y: i32,
+    pub wrap_z: i32,
 }
 
 #[binrw]

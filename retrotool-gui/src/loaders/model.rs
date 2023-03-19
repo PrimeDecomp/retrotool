@@ -18,6 +18,7 @@ use retrolib::format::{
         ETextureAnisotropicRatio, ETextureFilter, ETextureMipFilter, ETextureWrap,
         STextureSamplerData,
     },
+    CColor4f,
 };
 use uuid::Uuid;
 use wgpu_types::{AddressMode, Face, FilterMode};
@@ -191,6 +192,11 @@ impl ModelAsset {
     }
 }
 
+#[inline]
+fn convert_color(value: &CColor4f) -> Color {
+    Color::rgba_linear(value.r, value.g, value.b, value.a)
+}
+
 fn build_material(
     key: &MaterialKey,
     materials: &[CMaterialCache],
@@ -220,9 +226,9 @@ fn build_material(
             },
             EMaterialDataId::BCRL => match &data.data {
                 CMaterialDataInner::LayeredTexture(layers) => {
-                    out_mat.base_color_l0 = layers.base.colors[0].to_array().into();
-                    out_mat.base_color_l1 = layers.base.colors[1].to_array().into();
-                    out_mat.base_color_l2 = layers.base.colors[2].to_array().into();
+                    out_mat.base_color_l0 = convert_color(&layers.base.colors[0]);
+                    out_mat.base_color_l1 = convert_color(&layers.base.colors[1]);
+                    out_mat.base_color_l2 = convert_color(&layers.base.colors[2]);
                     out_mat.base_color_texture_0 =
                         texture_images.get(&layers.textures[0].id).cloned();
                     out_mat.base_color_texture_1 =
@@ -242,7 +248,7 @@ fn build_material(
             },
             EMaterialDataId::DIFC => match &data.data {
                 CMaterialDataInner::Color(color) => {
-                    out_mat.base_color = Color::rgba(color.r, color.g, color.b, color.a);
+                    out_mat.base_color = convert_color(color);
                 }
                 _ => log::warn!("Unsupported material data type for DIFC {:?}", data.data_type),
             },
@@ -256,7 +262,7 @@ fn build_material(
             },
             EMaterialDataId::ICNC => match &data.data {
                 CMaterialDataInner::Color(color) => {
-                    out_mat.emissive_color = Color::rgba(color.r, color.g, color.b, color.a);
+                    out_mat.emissive_color = convert_color(color);
                 }
                 _ => log::warn!("Unsupported material data type for ICNC {:?}", data.data_type),
             },
@@ -272,9 +278,9 @@ fn build_material(
             },
             EMaterialDataId::NRML => match &data.data {
                 CMaterialDataInner::LayeredTexture(layers) => {
-                    out_mat.normal_map_l0 = layers.base.colors[0].to_array().into();
-                    out_mat.normal_map_l1 = layers.base.colors[1].to_array().into();
-                    out_mat.normal_map_l2 = layers.base.colors[2].to_array().into();
+                    out_mat.normal_map_l0 = convert_color(&layers.base.colors[0]);
+                    out_mat.normal_map_l1 = convert_color(&layers.base.colors[1]);
+                    out_mat.normal_map_l2 = convert_color(&layers.base.colors[2]);
                     out_mat.normal_map_texture_0 =
                         texture_images.get(&layers.textures[0].id).cloned();
                     out_mat.normal_map_texture_1 =
@@ -304,9 +310,9 @@ fn build_material(
             },
             EMaterialDataId::MTLL => match &data.data {
                 CMaterialDataInner::LayeredTexture(layers) => {
-                    out_mat.metallic_map_l0 = layers.base.colors[0].to_array().into();
-                    out_mat.metallic_map_l1 = layers.base.colors[1].to_array().into();
-                    out_mat.metallic_map_l2 = layers.base.colors[2].to_array().into();
+                    out_mat.metallic_map_l0 = convert_color(&layers.base.colors[0]);
+                    out_mat.metallic_map_l1 = convert_color(&layers.base.colors[1]);
+                    out_mat.metallic_map_l2 = convert_color(&layers.base.colors[2]);
                     out_mat.metallic_map_texture_0 =
                         texture_images.get(&layers.textures[0].id).cloned();
                     out_mat.metallic_map_texture_1 =
@@ -356,7 +362,7 @@ fn sampler_descriptor_from_usage<'desc>(
             3 => todo!("Mirror clamp"),
             4 => AddressMode::ClampToBorder,
             5 => todo!("Clamp"),
-            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_x)),
+            -1 => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_x)),
             n => todo!("wrap {n}"),
         },
         address_mode_v: match usage.wrap_y {
@@ -366,7 +372,7 @@ fn sampler_descriptor_from_usage<'desc>(
             3 => todo!("Mirror clamp"),
             4 => AddressMode::ClampToBorder,
             5 => todo!("Clamp"),
-            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_y)),
+            -1 => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_y)),
             n => todo!("wrap {n}"),
         },
         address_mode_w: match usage.wrap_z {
@@ -376,13 +382,13 @@ fn sampler_descriptor_from_usage<'desc>(
             3 => todo!("Mirror clamp"),
             4 => AddressMode::ClampToBorder,
             5 => todo!("Clamp"),
-            u32::MAX => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_z)),
+            -1 => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_z)),
             n => todo!("wrap {n}"),
         },
         mag_filter: match usage.filter {
             0 => FilterMode::Nearest,
             1 => FilterMode::Linear,
-            u32::MAX => data.map_or(FilterMode::Nearest, |d| match d.filter {
+            -1 => data.map_or(FilterMode::Nearest, |d| match d.filter {
                 ETextureFilter::Nearest => FilterMode::Nearest,
                 ETextureFilter::Linear => FilterMode::Linear,
             }),
@@ -391,7 +397,7 @@ fn sampler_descriptor_from_usage<'desc>(
         min_filter: match usage.filter {
             0 => FilterMode::Nearest,
             1 => FilterMode::Linear,
-            u32::MAX => data.map_or(FilterMode::Nearest, |d| match d.filter {
+            -1 => data.map_or(FilterMode::Nearest, |d| match d.filter {
                 ETextureFilter::Nearest => FilterMode::Nearest,
                 ETextureFilter::Linear => FilterMode::Linear,
             }),

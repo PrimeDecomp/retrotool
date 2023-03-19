@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bevy::{
     asset::LoadState,
     core_pipeline::{clear_color::ClearColorConfig, tonemapping::Tonemapping},
@@ -5,9 +7,13 @@ use bevy::{
     prelude::*,
     render::{camera::Viewport, view::RenderLayers},
 };
-use bevy_egui::EguiContext;
-use egui::{Sense, Widget};
-use retrolib::format::cmdl::CMaterialCache;
+use bevy_egui::{EguiContext, EguiUserTextures};
+use egui::{Color32, Sense, Widget};
+use retrolib::format::{
+    cmdl::{CMaterialCache, CMaterialDataInner, CMaterialTextureTokenData},
+    txtr::K_FORM_TXTR,
+};
+use uuid::Uuid;
 
 use crate::{
     icon,
@@ -21,7 +27,10 @@ use crate::{
         model::{convert_aabb, load_model, ModelLod},
         TemporaryLabel,
     },
-    tabs::SystemTab,
+    tabs::{
+        texture::{TextureTab, UiTexture},
+        SystemTab, TabType,
+    },
     AssetRef, TabState,
 };
 
@@ -45,9 +54,11 @@ pub struct ModelTab {
     pub handle: Handle<ModelAsset>,
     pub loaded: Option<LoadedModel>,
     pub selected_lod: usize,
+    pub selected_material: Option<usize>,
     pub camera: ModelCamera,
     pub diffuse_map: Handle<Image>,
     pub specular_map: Handle<Image>,
+    pub egui_textures: HashMap<Uuid, UiTexture>,
 }
 
 impl ModelTab {
@@ -74,6 +85,7 @@ impl SystemTab for ModelTab {
         SResMut<Assets<TextureAsset>>,
         SResMut<Assets<Image>>,
         SResMut<AssetServer>,
+        SResMut<EguiUserTextures>,
     );
     type UiParam = (SCommands, SRes<AssetServer>, SRes<Assets<ModelAsset>>);
 
@@ -86,6 +98,7 @@ impl SystemTab for ModelTab {
             texture_assets,
             mut images,
             server,
+            mut egui_textures,
         ) = query;
         if let Some(loaded) = &self.loaded {
             for mesh in &loaded.meshes {
@@ -151,10 +164,21 @@ impl SystemTab for ModelTab {
         self.camera.init(&convert_aabb(&asset.inner.head.bounds), false);
         self.diffuse_map = server.load("papermill_diffuse_rgb9e5_zstd.ktx2");
         self.specular_map = server.load("papermill_specular_rgb9e5_zstd.ktx2");
+
+        // Build egui textures
+        for (texture_id, texture_handle) in &asset.textures {
+            let texture = texture_assets.get(texture_handle).unwrap();
+            let ui_texture = UiTexture::new(
+                texture.slices[0][0].clone(),
+                images.as_mut(),
+                egui_textures.as_mut(),
+            );
+            self.egui_textures.insert(*texture_id, ui_texture);
+        }
     }
 
     fn close(&mut self, query: SystemParamItem<'_, '_, Self::LoadParam>) {
-        let (mut commands, _, _, _, _, _, _) = query;
+        let (mut commands, _, _, _, _, _, _, _) = query;
         if let Some(loaded) = &self.loaded {
             for mesh in &loaded.meshes {
                 if let Some(commands) = commands.get_entity(mesh.entity) {
@@ -239,13 +263,28 @@ impl SystemTab for ModelTab {
                     }
                     for idx in loaded.lod[self.selected_lod].meshes.iter() {
                         let mesh = &mut loaded.meshes[idx];
-                        ui.checkbox(
-                            &mut mesh.visible,
-                            format!(
-                                "Mesh {idx} ({}, {}, {})",
-                                mesh.unk_c, mesh.unk_e, loaded.materials[mesh.material_idx].name
-                            ),
-                        );
+                        ui.horizontal(|ui| {
+                            ui.checkbox(
+                                &mut mesh.visible,
+                                format!(
+                                    "Mesh {idx} ({})",
+                                    loaded.materials[mesh.material_idx].name
+                                ),
+                            );
+                            if !matches!(mesh.unk_c, 0 | 1) {
+                                ui.colored_label(Color32::RED, format!("(unk_c: {})", mesh.unk_c));
+                            }
+                            if mesh.unk_e != 64 {
+                                ui.colored_label(Color32::RED, format!("(unk_e: {})", mesh.unk_e));
+                            }
+                            if ui
+                                .small_button(format!("{}", icon::MATERIAL_DATA))
+                                .on_hover_text_at_pointer("View material")
+                                .clicked()
+                            {
+                                self.selected_material = Some(mesh.material_idx);
+                            }
+                        });
                         if let Some(mut commands) = commands.get_entity(mesh.entity) {
                             commands.insert((
                                 if mesh.visible { Visibility::Visible } else { Visibility::Hidden },
@@ -255,6 +294,33 @@ impl SystemTab for ModelTab {
                     }
                 });
             });
+            if let Some(material_idx) = self.selected_material {
+                ui.push_id(format!("material_{}", material_idx), |ui| {
+                    egui::Frame::group(ui.style()).fill(Color32::from_black_alpha(200)).show(
+                        ui,
+                        |ui| {
+                            egui::ScrollArea::vertical()
+                                // .max_height(rect.height() * 0.25)
+                                .show(ui, |ui| {
+                                    if ui
+                                        .small_button(format!("{}", icon::PANEL_CLOSE))
+                                        .on_hover_text_at_pointer("Close")
+                                        .clicked()
+                                    {
+                                        self.selected_material = None;
+                                    }
+                                    material_ui(
+                                        ui,
+                                        &loaded.materials[material_idx],
+                                        &self.egui_textures,
+                                        state,
+                                        server.as_ref(),
+                                    );
+                                });
+                        },
+                    );
+                });
+            }
             state.render_layer += 1;
         } else {
             ui.centered_and_justified(|ui| {
@@ -274,4 +340,118 @@ impl SystemTab for ModelTab {
     }
 
     fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
+}
+
+fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) {
+    ui.horizontal(|ui| {
+        ui.label(format!("{}:", name));
+        if egui::Label::new(&value)
+            .sense(Sense::click())
+            .ui(ui)
+            .on_hover_text_at_pointer("Click to copy")
+            .clicked()
+        {
+            ui.output_mut(|out| out.copied_text = value);
+        }
+    });
+}
+
+fn texture_ui(
+    ui: &mut egui::Ui,
+    texture: &CMaterialTextureTokenData,
+    textures: &HashMap<Uuid, UiTexture>,
+    state: &mut TabState,
+    server: &AssetServer,
+) {
+    property_with_value(ui, "Texture ID", format!("{}", texture.id));
+    if let Some(ui_texture) = textures.get(&texture.id) {
+        if ui_texture
+            .image_scaled(200.0)
+            .sense(Sense::click())
+            .ui(ui)
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+        {
+            state.open_tab = Some(TabType::Texture(Box::new(TextureTab {
+                asset_ref: AssetRef { id: texture.id, kind: K_FORM_TXTR },
+                handle: server.load(format!("{}.{}", texture.id, K_FORM_TXTR)),
+                ..default()
+            })));
+        }
+    }
+    if let Some(usage) = &texture.usage {
+        property_with_value(ui, "Tex coord", format!("{}", usage.tex_coord));
+        property_with_value(ui, "Filter", format!("{}", usage.filter));
+        property_with_value(ui, "Wrap X", format!("{}", usage.wrap_x));
+        property_with_value(ui, "Wrap Y", format!("{}", usage.wrap_y));
+        property_with_value(ui, "Wrap Z", format!("{}", usage.wrap_z));
+    }
+}
+
+fn material_ui(
+    ui: &mut egui::Ui,
+    mat: &CMaterialCache,
+    textures: &HashMap<Uuid, UiTexture>,
+    state: &mut TabState,
+    server: &AssetServer,
+) {
+    property_with_value(ui, "Material", mat.name.clone());
+    property_with_value(ui, "Shader ID", format!("{}", mat.shader_id));
+    property_with_value(ui, "Unk ID", format!("{}", mat.unk_guid));
+    property_with_value(ui, "Flags", format!("{:032b}", mat.unk1));
+    property_with_value(ui, "Unk", format!("{}", mat.unk2));
+    ui.collapsing(format!("Render types: {}", mat.render_types.len()), |ui| {
+        for render_type in &mat.render_types {
+            ui.group(|ui| {
+                property_with_value(ui, "Data ID", format!("{}", render_type.data_id));
+                property_with_value(ui, "Data type", format!("{}", render_type.data_type));
+                property_with_value(ui, "Flag 1", format!("{}", render_type.flag1));
+                property_with_value(ui, "Flag 2", format!("{}", render_type.flag2));
+            });
+        }
+    });
+    ui.collapsing(format!("Data: {}", mat.data.len()), |ui| {
+        for material_data in &mat.data {
+            ui.group(|ui| {
+                property_with_value(ui, "Data ID", format!("{:?}", material_data.data_id));
+                property_with_value(ui, "Data type", format!("{:?}", material_data.data_type));
+                match &material_data.data {
+                    CMaterialDataInner::Texture(texture) => {
+                        texture_ui(ui, texture, textures, state, server);
+                    }
+                    CMaterialDataInner::Color(color) => {
+                        property_with_value(ui, "Color", format!("{:?}", color.to_array()));
+                    }
+                    CMaterialDataInner::Scalar(scalar) => {
+                        property_with_value(ui, "Scalar", format!("{}", scalar));
+                    }
+                    CMaterialDataInner::Int1(int) => {
+                        property_with_value(ui, "Int", format!("{}", int));
+                    }
+                    CMaterialDataInner::Int4(int4) => {
+                        property_with_value(ui, "Int4", format!("{:?}", int4.to_array()));
+                    }
+                    CMaterialDataInner::Mat4(mat4) => {
+                        property_with_value(ui, "Mat4", format!("{:?}", mat4));
+                    }
+                    CMaterialDataInner::LayeredTexture(layers) => {
+                        for (idx, color) in layers.base.colors.iter().enumerate() {
+                            property_with_value(
+                                ui,
+                                &format!("Color {idx}"),
+                                format!("{:?}", color.to_array()),
+                            );
+                        }
+                        property_with_value(ui, "Flags", format!("{}", layers.base.flags));
+                        property_with_value(ui, "Unk", format!("{}", layers.base.unk));
+                        for texture in &layers.textures {
+                            ui.group(|ui| {
+                                texture_ui(ui, texture, textures, state, server);
+                            });
+                        }
+                    }
+                }
+            });
+        }
+    });
 }

@@ -101,6 +101,11 @@ pub struct CVector4i {
     pub w: i32,
 }
 
+impl CVector4i {
+    #[inline]
+    pub fn to_array(self) -> [i32; 4] { [self.x, self.y, self.z, self.w] }
+}
+
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct CMatrix4f {
