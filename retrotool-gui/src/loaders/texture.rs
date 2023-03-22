@@ -189,7 +189,7 @@ fn texture_to_image(
 fn wgpu_format(format: ETextureFormat) -> Option<TextureFormat> {
     use wgpu_types::{AstcBlock::*, AstcChannel::*, TextureFormat::*};
     Some(match format {
-        ETextureFormat::R8Unorm => Rgba8Unorm,
+        ETextureFormat::R8Unorm => R8Unorm,
         ETextureFormat::R8Snorm => R8Snorm,
         ETextureFormat::R8Uint => R8Uint,
         ETextureFormat::R8Sint => R8Sint,

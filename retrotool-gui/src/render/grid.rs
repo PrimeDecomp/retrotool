@@ -15,7 +15,7 @@ use bevy::{
         },
         renderer::{RenderContext, RenderDevice},
         texture::BevyDefault,
-        view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
+        view::{ExtractedView, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
         RenderApp, RenderSet,
     },
 };
@@ -99,10 +99,9 @@ impl Node for GridCameraDriver {
         render_context: &mut RenderContext,
         world: &World,
     ) -> Result<(), NodeRunError> {
-        let clear_res = world.resource::<ClearColor>();
         let pipeline_res = world.resource::<GridPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
-        let uniforms = world.resource::<ViewUniforms>();
+        let view_uniforms = world.resource::<ViewUniforms>();
 
         let view_entity = graph.get_input_entity(Self::IN_VIEW)?;
         let Ok((
@@ -119,7 +118,7 @@ impl Node for GridCameraDriver {
             Some(resource),
         ) = (
             pipeline_cache.get_render_pipeline(pipeline_ids.id),
-            uniforms.uniforms.binding(),
+            view_uniforms.uniforms.binding(),
         ) else { return Ok(()); };
 
         render_context.command_encoder().push_debug_group("grid");
@@ -131,17 +130,20 @@ impl Node for GridCameraDriver {
                     entries: &[wgpu::BindGroupEntry { binding: 0, resource }],
                 });
 
+            let color_attachment = target.get_color_attachment(wgpu::Operations {
+                load: match settings.clear_color {
+                    ClearColorConfig::Default => {
+                        wgpu::LoadOp::Clear(world.resource::<ClearColor>().0.into())
+                    }
+                    ClearColorConfig::Custom(color) => wgpu::LoadOp::Clear(color.into()),
+                    ClearColorConfig::None => wgpu::LoadOp::Load,
+                },
+                store: true,
+            });
             let mut render_pass =
                 render_context.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
                     label: Some("grid_render_pass"),
-                    color_attachments: &[Some(target.get_color_attachment(wgpu::Operations {
-                        load: match settings.clear_color {
-                            ClearColorConfig::Default => wgpu::LoadOp::Clear(clear_res.0.into()),
-                            ClearColorConfig::Custom(color) => wgpu::LoadOp::Clear(color.into()),
-                            ClearColorConfig::None => wgpu::LoadOp::Load,
-                        },
-                        store: true,
-                    }))],
+                    color_attachments: &[Some(color_attachment)],
                     depth_stencil_attachment: None,
                 });
             if let Some(viewport) = &camera.viewport {
@@ -169,6 +171,7 @@ pub struct GridPipeline {
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub struct GridPipelineKey {
     pub msaa_samples: u32,
+    pub texture_format: wgpu::TextureFormat,
 }
 
 impl FromWorld for GridPipeline {
@@ -212,9 +215,9 @@ impl SpecializedRenderPipeline for GridPipeline {
                 shader_defs: vec![],
                 entry_point: "fragment".into(),
                 targets: vec![Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::bevy_default(),
+                    format: key.texture_format,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: wgpu::ColorWrites::COLOR,
                 })],
             }),
             primitive: wgpu::PrimitiveState {
@@ -237,12 +240,17 @@ pub fn prepare_grid_pipeline(
     pipeline_cache: Res<PipelineCache>,
     mut pipelines: ResMut<SpecializedRenderPipelines<GridPipeline>>,
     pipeline: Res<GridPipeline>,
-    views: Query<(Entity, &GridSettings)>,
+    views: Query<(Entity, &ExtractedView), With<GridSettings>>,
     msaa: Res<Msaa>,
 ) {
-    for (entity, _settings) in &views {
+    for (entity, view) in &views {
         let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, GridPipelineKey {
             msaa_samples: msaa.samples(),
+            texture_format: if view.hdr {
+                ViewTarget::TEXTURE_FORMAT_HDR
+            } else {
+                wgpu::TextureFormat::bevy_default()
+            },
         });
         commands.entity(entity).insert(GridPipelineIds { id: pipeline_id });
     }
@@ -251,6 +259,10 @@ pub fn prepare_grid_pipeline(
 #[derive(Component, Reflect, Clone)]
 pub struct GridSettings {
     pub clear_color: ClearColorConfig,
+}
+
+impl Default for GridSettings {
+    fn default() -> Self { Self { clear_color: ClearColorConfig::None } }
 }
 
 // noinspection RsSortImplTraitMembers

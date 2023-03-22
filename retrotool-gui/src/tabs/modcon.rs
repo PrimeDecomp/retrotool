@@ -19,9 +19,7 @@ use crate::{
     },
     material::CustomMaterial,
     render::{
-        camera::ModelCamera,
-        grid::GridSettings,
-        model::{convert_transform, load_model},
+        camera::ModelCamera, convert_transform, grid::GridSettings, model::load_model,
         TemporaryLabel,
     },
     tabs::{model::ModelTab, SystemTab, TabState, TabType},
@@ -120,8 +118,8 @@ impl SystemTab for ModConTab {
         SRes<AssetServer>,
         SRes<Assets<ModelAsset>>,
         SRes<Assets<ModConAsset>>,
-        SQuery<&'static Parent, With<Intersection<ModConRaycastSet>>>,
-        SQuery<&'static ModelLabel>,
+        SQuery<Read<Parent>, With<Intersection<ModConRaycastSet>>>,
+        SQuery<Read<ModelLabel>>,
     );
 
     fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
@@ -236,8 +234,12 @@ impl SystemTab for ModConTab {
             let mut min = Vec3A::splat(f32::MAX);
             let mut max = Vec3A::splat(f32::MIN);
             for info in &self.models {
-                min = info.aabb.min().min(min);
-                max = info.aabb.max().max(max);
+                let m_min = Vec3::from(info.aabb.min());
+                let m_max = Vec3::from(info.aabb.max());
+                for &xf in &info.transforms {
+                    min = min.min(Vec3A::from(xf * m_min));
+                    max = max.max(Vec3A::from(xf * m_max));
+                }
             }
             let aabb = Aabb::from_min_max(min.into(), max.into());
             self.camera.init(&aabb, true);

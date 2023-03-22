@@ -24,8 +24,9 @@ use crate::{
     material::CustomMaterial,
     render::{
         camera::ModelCamera,
+        convert_aabb,
         grid::GridSettings,
-        model::{convert_aabb, load_model, ModelLod},
+        model::{load_model, ModelLod},
         TemporaryLabel,
     },
     tabs::{

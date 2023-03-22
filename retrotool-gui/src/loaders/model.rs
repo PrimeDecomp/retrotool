@@ -18,13 +18,14 @@ use retrolib::format::{
         ETextureAnisotropicRatio, ETextureFilter, ETextureMipFilter, ETextureWrap,
         STextureSamplerData,
     },
-    CColor4f,
 };
 use uuid::Uuid;
 use wgpu_types::{AddressMode, Face, FilterMode};
 
 use crate::{
-    loaders::texture::TextureAsset, material::CustomMaterial, render::model::MESH_FLAG_OPAQUE,
+    loaders::texture::TextureAsset,
+    material::CustomMaterial,
+    render::{convert_color, model::MESH_FLAG_OPAQUE},
     AssetRef,
 };
 
@@ -190,11 +191,6 @@ impl ModelAsset {
             }
         })
     }
-}
-
-#[inline]
-fn convert_color(value: &CColor4f) -> Color {
-    Color::rgba_linear(value.r, value.g, value.b, value.a)
 }
 
 fn build_material(

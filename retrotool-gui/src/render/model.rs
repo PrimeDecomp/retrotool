@@ -12,12 +12,9 @@ use bit_set::BitSet;
 use half::prelude::*;
 use retrolib::{
     array_ref,
-    format::{
-        cmdl::{
-            CMaterialCache, EBufferType, EVertexComponent, EVertexDataFormat, ModelData,
-            SVertexDataComponent,
-        },
-        CAABox, CTransform4f,
+    format::cmdl::{
+        CMaterialCache, EBufferType, EVertexComponent, EVertexDataFormat, ModelData,
+        SVertexDataComponent,
     },
 };
 use wgpu_types::PrimitiveTopology;
@@ -27,6 +24,7 @@ use crate::{
     material::{
         ATTRIBUTE_TANGENT_1, ATTRIBUTE_TANGENT_2, ATTRIBUTE_UV_1, ATTRIBUTE_UV_2, ATTRIBUTE_UV_3,
     },
+    render::convert_aabb,
 };
 
 pub const MESH_FLAG_OPAQUE: u16 = 1;
@@ -134,19 +132,6 @@ pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<Built
         materials: mtrl.materials.clone(),
         aabb: convert_aabb(&head.bounds),
     })
-}
-
-#[inline]
-pub fn convert_aabb(aabb: &CAABox) -> Aabb {
-    let min = mint::Vector3::from(aabb.min);
-    let max = mint::Vector3::from(aabb.max);
-    Aabb::from_min_max(min.into(), max.into())
-}
-
-#[inline]
-pub fn convert_transform(xf: &CTransform4f) -> Transform {
-    let mtx = mint::ColumnMatrix4::from(*xf);
-    Transform::from_matrix(mtx.into())
 }
 
 #[derive(Debug, Clone, Default)]
