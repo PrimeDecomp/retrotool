@@ -581,9 +581,9 @@ impl TextureData {
         ensure!(txtr_desc.reader_version == 47);
         ensure!(txtr_desc.writer_version == 51);
 
-        let (head_desc, head_data, _) = ChunkDescriptor::slice(txtr_data, Endian::Little)?;
+        let (head_desc, head_data, _) = ChunkDescriptor::slice(txtr_data, e)?;
         ensure!(head_desc.id == K_CHUNK_HEAD);
-        let head: STextureHeader = Cursor::new(head_data).read_type(Endian::Little)?;
+        let head: STextureHeader = Cursor::new(head_data).read_type(e)?;
 
         // log::debug!("META: {meta:#?}");
         // log::debug!("HEAD: {head:#?}");

@@ -1,3 +1,4 @@
+pub mod lightprobe;
 pub mod material;
 pub mod modcon;
 pub mod model;
@@ -18,11 +19,13 @@ impl Plugin for RetroAssetPlugin {
             .add_asset::<model::ModelAsset>()
             .add_asset::<package::PackageDirectory>()
             .add_asset::<texture::TextureAsset>()
+            .add_asset::<lightprobe::LightProbeAsset>()
             .init_asset_loader::<material::MaterialAssetLoader>()
             .init_asset_loader::<modcon::ModConAssetLoader>()
             .init_asset_loader::<model::ModelAssetLoader>()
             .init_asset_loader::<package::PackageAssetLoader>()
             .init_asset_loader::<texture::TextureAssetLoader>()
+            .init_asset_loader::<lightprobe::LightProbeAssetLoader>()
             .add_system(package::package_loader_system);
     }
 }

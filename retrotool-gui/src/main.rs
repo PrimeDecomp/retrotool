@@ -223,6 +223,10 @@ fn ui_system(world: &mut World) {
                             load_tab(world, &mut ctx, tab.as_mut());
                             tab_assets.push(tab.asset_ref);
                         }
+                        TabType::LightProbe(tab) => {
+                            load_tab(world, &mut ctx, tab.as_mut());
+                            tab_assets.push(tab.asset_ref);
+                        }
                         TabType::Empty => {}
                     }
                 }

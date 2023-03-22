@@ -8,6 +8,7 @@ use bevy_egui::{EguiContext, EguiUserTextures};
 use egui::{text::LayoutJob, Color32, TextFormat, Widget};
 use retrolib::format::{
     cmdl::{K_FORM_CMDL, K_FORM_SMDL, K_FORM_WMDL},
+    ltpb::K_FORM_LTPB,
     mcon::K_FORM_MCON,
     txtr::{ETextureFormat, ETextureType, K_FORM_TXTR},
     FourCC,
@@ -16,7 +17,10 @@ use retrolib::format::{
 use crate::{
     icon,
     loaders::{model::ModelAsset, package::PackageDirectory, texture::TextureAsset},
-    tabs::{modcon::ModConTab, model::ModelTab, texture::TextureTab, SystemTab, TabState, TabType},
+    tabs::{
+        lightprobe::LightProbeTab, modcon::ModConTab, model::ModelTab, texture::TextureTab,
+        SystemTab, TabState, TabType,
+    },
     AssetRef,
 };
 
@@ -178,6 +182,7 @@ impl SystemTab for ProjectTab {
                                 K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => icon::FILE_3D,
                                 K_FORM_FMV0 => icon::FILE_MOVIE,
                                 K_FORM_ROOM | K_FORM_MCON => icon::SCENE_DATA,
+                                K_FORM_LTPB => icon::LIGHTPROBE_GRID,
                                 _ => icon::FILE,
                             },
                             entry.kind,
@@ -238,6 +243,15 @@ impl SystemTab for ProjectTab {
                                     handle,
                                     ..default()
                                 })));
+                            }
+                            K_FORM_LTPB => {
+                                let handle = server.load(format!("{}.{}", entry.id, entry.kind));
+                                state.open_tab =
+                                    Some(TabType::LightProbe(Box::new(LightProbeTab {
+                                        asset_ref,
+                                        handle,
+                                        ..default()
+                                    })));
                             }
                             _ => {}
                         }

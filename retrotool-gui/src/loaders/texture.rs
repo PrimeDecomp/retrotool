@@ -17,6 +17,7 @@ use retrolib::format::{
         decompress_image, slice_texture, ETextureFormat, ETextureType, TextureData, K_FORM_TXTR,
     },
 };
+use uuid::Uuid;
 
 use crate::AssetRef;
 
@@ -55,63 +56,66 @@ impl AssetLoader for TextureAssetLoader {
             let data = TextureData::slice(bytes, meta, Endian::Little)?;
             info!("Loading texture {} {:?}", id, data.head);
 
-            let is_srgb = data.head.format.is_srgb();
-            let slices = slice_texture(&data)?;
-            let (bw, bh, _) = data.head.format.block_size();
-            let format = wgpu_format(data.head.format)
-                .ok_or_else(|| anyhow!("Texture format unsupported: {:?}", data.head.format))?;
-            let supported =
-                texture_format_supported(data.head.kind, format, &self.supported_formats);
-
-            let mut images = Vec::with_capacity(slices.len());
-            for mip in &slices {
-                let mut slice_images = Vec::with_capacity(mip.len());
-                for slice in mip {
-                    let slice_data = &data.data[slice.data_range.clone()];
-                    slice_images.push(if supported {
-                        texture_slice_to_image(
-                            format,
-                            slice_data.to_vec(),
-                            slice.width,
-                            slice.height,
-                            bw,
-                            bh,
-                        )
-                    } else {
-                        Image::from_dynamic(
-                            decompress_image(
-                                data.head.format,
-                                slice.width,
-                                slice.height,
-                                slice_data,
-                            )?,
-                            is_srgb,
-                        )
-                    });
-                }
-                images.push(slice_images);
-            }
-
-            let (image_data, format) = if supported {
-                (data.data.clone(), format)
-            } else {
-                (
-                    images.iter().flatten().flat_map(|i| &i.data).cloned().collect(),
-                    if is_srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm },
-                )
-            };
-            let texture = texture_to_image(&data, format, image_data)?;
-            load_context.set_default_asset(LoadedAsset::new(TextureAsset {
-                asset_ref: AssetRef { id, kind: K_FORM_TXTR },
-                inner: data,
-                texture,
-                slices: images,
-            }));
+            let asset = load_texture_asset(id, data, &self.supported_formats)?;
+            load_context.set_default_asset(LoadedAsset::new(asset));
             Ok(())
         })
     }
 
     fn extensions(&self) -> &[&str] { &["txtr"] }
+}
+
+pub fn load_texture_asset(
+    id: Uuid,
+    data: TextureData,
+    supported_formats: &CompressedImageFormats,
+) -> Result<TextureAsset> {
+    let is_srgb = data.head.format.is_srgb();
+    let slices = slice_texture(&data)?;
+    let (bw, bh, _) = data.head.format.block_size();
+    let format = wgpu_format(data.head.format)
+        .ok_or_else(|| anyhow!("Texture format unsupported: {:?}", data.head.format))?;
+    let supported = texture_format_supported(data.head.kind, format, supported_formats);
+
+    let mut images = Vec::with_capacity(slices.len());
+    for mip in &slices {
+        let mut slice_images = Vec::with_capacity(mip.len());
+        for slice in mip {
+            let slice_data = &data.data[slice.data_range.clone()];
+            slice_images.push(if supported {
+                texture_slice_to_image(
+                    format,
+                    slice_data.to_vec(),
+                    slice.width,
+                    slice.height,
+                    bw,
+                    bh,
+                )
+            } else {
+                Image::from_dynamic(
+                    decompress_image(data.head.format, slice.width, slice.height, slice_data)?,
+                    is_srgb,
+                )
+            });
+        }
+        images.push(slice_images);
+    }
+
+    let (image_data, format) = if supported {
+        (data.data.clone(), format)
+    } else {
+        (
+            images.iter().flatten().flat_map(|i| &i.data).cloned().collect(),
+            if is_srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm },
+        )
+    };
+    let texture = texture_to_image(&data, format, image_data)?;
+    Ok(TextureAsset {
+        asset_ref: AssetRef { id, kind: K_FORM_TXTR },
+        inner: data,
+        texture,
+        slices: images,
+    })
 }
 
 /// Create an [Image] from a 2D texture slice.

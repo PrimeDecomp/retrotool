@@ -1,6 +1,7 @@
 pub mod chunk;
 pub mod cmdl;
 pub mod foot;
+pub mod ltpb;
 pub mod mcon;
 pub mod mtrl;
 pub mod pack;
@@ -176,6 +177,41 @@ impl From<mint::Vector4<f32>> for CColor4f {
 }
 impl mint::IntoMint for CColor4f {
     type MintType = mint::Vector4<f32>;
+}
+
+#[binrw]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct CVector3i {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
+
+impl CVector3i {
+    #[inline]
+    pub fn new(x: i32, y: i32, z: i32) -> Self { Self { x, y, z } }
+
+    #[inline]
+    pub fn splat(xyz: i32) -> Self { Self { x: xyz, y: xyz, z: xyz } }
+
+    #[inline]
+    pub fn to_array(self) -> [i32; 3] { [self.x, self.y, self.z] }
+}
+impl From<[i32; 3]> for CVector3i {
+    fn from(value: [i32; 3]) -> Self { Self { x: value[0], y: value[1], z: value[2] } }
+}
+impl From<CVector3i> for [i32; 3] {
+    fn from(value: CVector3i) -> Self { value.to_array() }
+}
+
+impl From<CVector3i> for mint::Vector3<i32> {
+    fn from(value: CVector3i) -> Self { Self::from([value.x, value.y, value.z]) }
+}
+impl From<mint::Vector3<i32>> for CVector3i {
+    fn from(value: mint::Vector3<i32>) -> Self { Self { x: value.x, y: value.y, z: value.z } }
+}
+impl mint::IntoMint for CVector3i {
+    type MintType = mint::Vector3<i32>;
 }
 
 #[binrw]

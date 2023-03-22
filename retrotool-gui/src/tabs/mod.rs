@@ -1,3 +1,4 @@
+pub mod lightprobe;
 pub mod modcon;
 pub mod model;
 pub mod project;
@@ -13,6 +14,7 @@ pub enum TabType {
     Texture(Box<texture::TextureTab>),
     Model(Box<model::ModelTab>),
     ModCon(Box<modcon::ModConTab>),
+    LightProbe(Box<lightprobe::LightProbeTab>),
     Empty,
 }
 
@@ -82,6 +84,7 @@ impl egui_dock::TabViewer for TabViewer<'_> {
             TabType::Texture(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
             TabType::Model(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
             TabType::ModCon(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
+            TabType::LightProbe(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
             TabType::Empty => {}
         }
     }
@@ -92,6 +95,7 @@ impl egui_dock::TabViewer for TabViewer<'_> {
             TabType::Texture(tab) => tab.title(),
             TabType::Model(tab) => tab.title(),
             TabType::ModCon(tab) => tab.title(),
+            TabType::LightProbe(tab) => tab.title(),
             TabType::Empty => "".into(),
         }
     }
@@ -108,6 +112,10 @@ impl egui_dock::TabViewer for TabViewer<'_> {
                 true
             }
             TabType::ModCon(tab) => {
+                close_tab(self.world, tab.as_mut());
+                true
+            }
+            TabType::LightProbe(tab) => {
                 close_tab(self.world, tab.as_mut());
                 true
             }
