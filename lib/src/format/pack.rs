@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{hash_map, HashMap},
     io::{Cursor, Seek, SeekFrom, Write},
 };
 
@@ -117,7 +117,7 @@ pub struct AssetInfo {
 pub struct Asset<'a> {
     pub id: Uuid,
     pub kind: FourCC,
-    pub name: Option<String>,
+    pub names: Vec<String>,
     // TODO lazy decompression?
     pub data: Cow<'a, [u8]>,
     pub meta: Option<Cow<'a, [u8]>>,
@@ -137,7 +137,7 @@ pub struct Package<'a> {
 pub struct SparsePackageEntry {
     pub id: Uuid,
     pub kind: FourCC,
-    pub name: Option<String>,
+    pub names: Vec<String>,
     pub reader_version: u32,
     pub writer_version: u32,
 }
@@ -170,7 +170,7 @@ impl Package<'_> {
         ensure!(tocc.id == K_FORM_TOCC);
         ensure!(tocc.reader_version == 3);
         let mut adir: Option<AssetDirectory> = None;
-        let mut strg: HashMap<Uuid, String> = HashMap::new();
+        let mut strg: HashMap<Uuid, Vec<String>> = HashMap::new();
         while !tocc_data.is_empty() {
             let (desc, chunk_data, remain) = ChunkDescriptor::slice(tocc_data, e)?;
             let mut reader = Cursor::new(chunk_data);
@@ -182,7 +182,15 @@ impl Package<'_> {
                 K_CHUNK_STRG => {
                     let chunk: StringTable = reader.read_type(e)?;
                     for entry in chunk.entries {
-                        strg.insert(entry.asset_id, String::from_utf8(entry.name)?);
+                        let name = String::from_utf8(entry.name)?;
+                        match strg.entry(entry.asset_id) {
+                            hash_map::Entry::Occupied(e) => {
+                                e.into_mut().push(name);
+                            }
+                            hash_map::Entry::Vacant(e) => {
+                                e.insert(vec![name]);
+                            }
+                        }
                     }
                 }
                 kind => bail!("Unhandled TOCC chunk {:?}", kind),
@@ -193,15 +201,22 @@ impl Package<'_> {
         let Some(adir) = adir else {
             bail!("Failed to locate asset directory");
         };
+        let mut last_id: Option<Uuid> = None;
         let entries = adir
             .entries
             .into_iter()
-            .map(|asset_entry| SparsePackageEntry {
-                id: asset_entry.asset_id,
-                kind: asset_entry.asset_type,
-                name: strg.get(&asset_entry.asset_id).cloned(),
-                reader_version: asset_entry.version,
-                writer_version: asset_entry.other_version,
+            .filter_map(|asset_entry| {
+                if matches!(last_id, Some(id) if id == asset_entry.asset_id) {
+                    return None;
+                }
+                last_id = Some(asset_entry.asset_id);
+                Some(SparsePackageEntry {
+                    id: asset_entry.asset_id,
+                    kind: asset_entry.asset_type,
+                    names: strg.get(&asset_entry.asset_id).cloned().unwrap_or_default(),
+                    reader_version: asset_entry.version,
+                    writer_version: asset_entry.other_version,
+                })
             })
             .collect();
         Ok(entries)
@@ -326,7 +341,7 @@ impl Package<'_> {
         log::debug!("TOCC: {:?}", tocc);
         let mut adir: Option<AssetDirectory> = None;
         let mut meta: HashMap<Uuid, &[u8]> = HashMap::new();
-        let mut strg: HashMap<Uuid, String> = HashMap::new();
+        let mut strg: HashMap<Uuid, Vec<String>> = HashMap::new();
         while !tocc_data.is_empty() {
             let (desc, chunk_data, remain) = ChunkDescriptor::slice(tocc_data, e)?;
             let mut reader = Cursor::new(chunk_data);
@@ -357,7 +372,15 @@ impl Package<'_> {
                     let chunk: StringTable = reader.read_type(e)?;
                     for entry in chunk.entries {
                         log::debug!("- {:?}", entry);
-                        strg.insert(entry.asset_id, String::from_utf8(entry.name)?);
+                        let name = String::from_utf8(entry.name)?;
+                        match strg.entry(entry.asset_id) {
+                            hash_map::Entry::Occupied(e) => {
+                                e.into_mut().push(name);
+                            }
+                            hash_map::Entry::Vacant(e) => {
+                                e.insert(vec![name]);
+                            }
+                        }
                     }
                 }
                 kind => bail!("Unhandled TOCC chunk {:?}", kind),
@@ -390,7 +413,7 @@ impl Package<'_> {
             package.assets.push(Asset {
                 id: asset_entry.asset_id,
                 kind: asset_entry.asset_type,
-                name: strg.get(&asset_entry.asset_id).cloned(),
+                names: strg.get(&asset_entry.asset_id).cloned().unwrap_or_default(),
                 data,
                 meta: meta.get(&asset_entry.asset_id).map(|data| Cow::Borrowed(*data)),
                 info: AssetInfo {
@@ -426,7 +449,7 @@ impl Package<'_> {
             if asset.meta.is_some() {
                 metadata.entries.push(MetadataTableEntry { asset_id: asset.id, offset: 0 });
             }
-            if let Some(name) = &asset.name {
+            for name in &asset.names {
                 // Default::default makes the IDE happy,
                 // just need to suppress clippy
                 #[allow(clippy::needless_update)]

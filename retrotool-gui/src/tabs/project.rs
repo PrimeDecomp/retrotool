@@ -159,7 +159,7 @@ impl SystemTab for ProjectTab {
                     search.is_empty()
                         || (search.as_bytes().len() == 4
                             && e.kind.0.eq_ignore_ascii_case(search.as_bytes()))
-                        || matches!(&e.name, Some(v) if v.to_ascii_lowercase().contains(search))
+                        || e.names.iter().any(|n| n.to_ascii_lowercase().contains(search))
                         || e.id.to_string().contains(search)
                 })
                 .peekable();
@@ -187,11 +187,11 @@ impl SystemTab for ProjectTab {
                         Color32::GRAY,
                         0.0,
                     );
-                    if let Some(name) = &entry.name {
+                    for name in &entry.names {
                         job.append(
                             &format!("\n{name}"),
                             0.0,
-                            TextFormat::simple(monospace, Color32::WHITE),
+                            TextFormat::simple(monospace.clone(), Color32::WHITE),
                         );
                     }
                     let asset_ref = AssetRef { id: entry.id, kind: entry.kind };

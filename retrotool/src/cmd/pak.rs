@@ -70,11 +70,12 @@ fn extract(args: ExtractArgs) -> Result<()> {
     let data = map_file(args.input)?;
     let package = Package::read_full(&data, Endian::Little)?;
     for asset in &package.assets {
-        let name = asset
-            .name
-            .as_ref()
-            .map(|name| format!("{} ({})", asset.id, name))
-            .unwrap_or_else(|| format!("{}", asset.id));
+        let asset_names = asset.names.join(", ");
+        let name = if asset_names.is_empty() {
+            format!("{}", asset.id)
+        } else {
+            format!("{} ({})", asset.id, asset_names)
+        };
         log::info!(
             "Asset {} {} size {:#X} (compressed {}, meta size {:#X})",
             asset.kind,
@@ -84,8 +85,8 @@ fn extract(args: ExtractArgs) -> Result<()> {
             asset.meta.as_ref().map(|m| m.len()).unwrap_or_default()
         );
         let file_name = asset
-            .name
-            .as_ref()
+            .names
+            .first()
             .map(|name| format!("{}.{}", name, asset.kind))
             .unwrap_or_else(|| format!("{}.{}", asset.id, asset.kind));
         let path = args.output.join(&file_name);
@@ -116,7 +117,7 @@ fn extract(args: ExtractArgs) -> Result<()> {
                 w.write_le(&meta_chunk)?;
                 w.write_all(meta)?;
             }
-            if let Some(name) = &asset.name {
+            for name in &asset.names {
                 let bytes = name.as_bytes();
                 let name_chunk =
                     ChunkDescriptor { id: K_CHUNK_NAME, size: bytes.len() as u64, unk: 0, skip: 0 };
@@ -149,7 +150,7 @@ fn package(args: PackageArgs) -> Result<()> {
         ensure!(foot.reader_version == 1);
         let mut ainfo: Option<AssetInfo> = None;
         let mut meta: Option<&[u8]> = None;
-        let mut name: Option<String> = None;
+        let mut names: Vec<String> = vec![];
         while !foot_data.is_empty() {
             let (chunk, chunk_data, remain) = ChunkDescriptor::slice(foot_data, Endian::Little)?;
             match chunk.id {
@@ -160,7 +161,7 @@ fn package(args: PackageArgs) -> Result<()> {
                     meta = Some(chunk_data);
                 }
                 K_CHUNK_NAME => {
-                    name = Some(String::from_utf8(chunk_data.to_vec())?);
+                    names.push(String::from_utf8(chunk_data.to_vec())?);
                 }
                 _ => {}
             }
@@ -172,7 +173,7 @@ fn package(args: PackageArgs) -> Result<()> {
         package.assets.push(Asset {
             id: ainfo.id,
             kind: form.id,
-            name,
+            names,
             data: Cow::Owned(data[..data.len() - remain.len()].to_vec()),
             meta: meta.map(|data| Cow::Owned(data.to_vec())),
             info: ainfo,
