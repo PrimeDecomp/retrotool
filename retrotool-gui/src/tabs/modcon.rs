@@ -238,7 +238,8 @@ impl SystemTab for ModConTab {
                 min = info.aabb.min().min(min);
                 max = info.aabb.max().max(max);
             }
-            self.camera.init(&Aabb::from_min_max(min.into(), max.into()), true);
+            let aabb = Aabb::from_min_max(min.into(), max.into());
+            self.camera.init(&aabb, true);
         }
 
         // FIXME

@@ -154,21 +154,17 @@ impl SystemTab for TextureTab {
                     mip.texture_ids.len(),
                 ));
             }
-            let w = mip.width;
-            let h = mip.height;
-            let size = egui::Vec2 { x: w as f32, y: h as f32 };
+            let size = egui::Vec2::new(mip.width as f32, mip.height as f32);
             let draw_image =
                 |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32, flip: bool| {
-                    let min = egui::Vec2 { x: (w * x) as f32, y: (h * y) as f32 };
-                    let max = egui::Vec2 { x: (w * (x + 1)) as f32, y: (h * (y + 1)) as f32 };
+                    let min = rect.min + size * egui::Vec2::new(x as f32, y as f32);
                     let y_range = if flip { 1.0..=0.0 } else { 0.0..=1.0 };
                     egui::widgets::Image::new(mip.texture_ids[i], size)
                         .uv(egui::Rect::from_x_y_ranges(0.0..=1.0, y_range))
-                        .paint_at(ui, egui::Rect { min: rect.min + min, max: rect.min + max });
+                        .paint_at(ui, egui::Rect::from_min_size(min, size));
                 };
             if txtr.inner.head.kind == ETextureType::Cube && mip.texture_ids.len() == 6 {
-                let (_, rect) =
-                    ui.allocate_space(egui::Vec2 { x: (w * 4) as f32, y: (h * 3) as f32 });
+                let (_, rect) = ui.allocate_space(size * egui::Vec2::new(4.0, 3.0));
                 draw_image(ui, &rect, 2, 1, 0, self.v_flip);
                 draw_image(ui, &rect, 1, 0, 1, self.v_flip);
                 draw_image(ui, &rect, 4, 1, 1, self.v_flip);
@@ -176,10 +172,8 @@ impl SystemTab for TextureTab {
                 draw_image(ui, &rect, 5, 3, 1, self.v_flip);
                 draw_image(ui, &rect, 3, 1, 2, self.v_flip);
             } else {
-                let (_, rect) = ui.allocate_space(egui::Vec2 {
-                    x: (w as usize * mip.texture_ids.len()) as f32,
-                    y: h as f32,
-                });
+                let (_, rect) =
+                    ui.allocate_space(size * egui::Vec2::new(mip.texture_ids.len() as f32, 1.0));
                 for i in 0..mip.texture_ids.len() {
                     draw_image(ui, &rect, i, i as u32, 0, self.v_flip);
                 }

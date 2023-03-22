@@ -88,10 +88,6 @@ pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<Built
     }
 
     // Process meshes
-    let aabb = Aabb::from_min_max(
-        Vec3::new(head.bounds.min.x, head.bounds.min.y, head.bounds.min.z),
-        Vec3::new(head.bounds.max.x, head.bounds.max.y, head.bounds.max.z),
-    );
     let mut out_meshes = vec![];
     for (_idx, in_mesh) in mesh.meshes.iter().enumerate() {
         let (indices, vert_range) = match &index_buffers[in_mesh.idx_buf_idx as usize] {
@@ -132,18 +128,25 @@ pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<Built
         lod.push(ModelLod { meshes: visible, distance: mesh.lod_rules.get(idx).map(|r| r.value) });
     }
 
-    Ok(BuiltModel { meshes: out_meshes, lod, materials: mtrl.materials.clone(), aabb })
+    Ok(BuiltModel {
+        meshes: out_meshes,
+        lod,
+        materials: mtrl.materials.clone(),
+        aabb: convert_aabb(&head.bounds),
+    })
 }
 
+#[inline]
 pub fn convert_aabb(aabb: &CAABox) -> Aabb {
-    Aabb::from_min_max(
-        Vec3::new(aabb.min.x, aabb.min.y, aabb.min.z),
-        Vec3::new(aabb.max.x, aabb.max.y, aabb.max.z),
-    )
+    let min = mint::Vector3::from(aabb.min);
+    let max = mint::Vector3::from(aabb.max);
+    Aabb::from_min_max(min.into(), max.into())
 }
 
+#[inline]
 pub fn convert_transform(xf: &CTransform4f) -> Transform {
-    Transform::from_matrix(Mat4::from_cols_array(&xf.to_matrix_array()))
+    let mtx = mint::ColumnMatrix4::from(*xf);
+    Transform::from_matrix(mtx.into())
 }
 
 #[derive(Debug, Clone, Default)]

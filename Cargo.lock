@@ -1438,6 +1438,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8ecd80612937e0267909d5351770fe150004e24dab93954f69ca62eecd3f77e"
 dependencies = [
  "bytemuck",
+ "mint",
 ]
 
 [[package]]
@@ -1733,6 +1734,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e4afd9ad95555081e109fe1d21f2a30c691b5f0919c67dfa690a2e1eb6bd51c"
 dependencies = [
  "bytemuck",
+ "mint",
  "serde",
 ]
 
@@ -2234,6 +2236,12 @@ checksum = "b275950c28b37e794e8c55d88aeb5e139d0ce23fdbbeda68f8d7174abdf9e8fa"
 dependencies = [
  "adler",
 ]
+
+[[package]]
+name = "mint"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "mio"
@@ -2839,6 +2847,7 @@ dependencies = [
  "image",
  "log",
  "memmap2",
+ "mint",
  "tegra_swizzle",
  "uuid",
 ]
@@ -2874,6 +2883,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "bevy_embedded_assets",
+ "bevy_math",
  "bevy_mod_raycast",
  "binrw",
  "bit-set",
@@ -2883,6 +2893,7 @@ dependencies = [
  "half 3.0.0-dev",
  "image",
  "log",
+ "mint",
  "num-traits",
  "retrolib",
  "uuid",

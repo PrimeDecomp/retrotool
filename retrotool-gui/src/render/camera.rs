@@ -35,8 +35,7 @@ impl ModelCamera {
         let mut pan = Vec2::ZERO;
         let scroll = {
             if response.hovered() {
-                // let delta = ui.input(|i| i.scroll_delta);
-                Vec2::new(scroll_delta.x, scroll_delta.y)
+                mint::Vector2::from(scroll_delta).into()
             } else {
                 Vec2::ZERO
             }
@@ -50,11 +49,9 @@ impl ModelCamera {
             self.upside_down = up.y <= 0.0;
         }
         if response.dragged_by(PointerButton::Primary) {
-            let delta = response.drag_delta();
-            rotation_move = Vec2::new(delta.x, delta.y);
+            rotation_move = mint::Vector2::from(response.drag_delta()).into();
         } else if response.dragged_by(PointerButton::Middle) {
-            let delta = response.drag_delta();
-            pan = Vec2::new(delta.x, delta.y);
+            pan = mint::Vector2::from(response.drag_delta()).into();
         }
         if rotation_move.length_squared() > 0.0 {
             any = true;
@@ -75,7 +72,7 @@ impl ModelCamera {
             any = true;
             if let Projection::Perspective(projection) = &self.projection {
                 pan *= Vec2::new(projection.fov * projection.aspect_ratio, projection.fov)
-                    / Vec2::new(rect.width(), rect.height());
+                    / Vec2::from(mint::Vector2::from(rect.size()));
             }
             // translate by local axes
             let right = self.transform.rotation * Vec3::X * -pan.x;
