@@ -28,7 +28,7 @@ use crate::{
         RetroAssetPlugin,
     },
     material::CustomMaterial,
-    render::TemporaryLabel,
+    render::{grid::GridPlugin, TemporaryLabel},
     tabs::{load_tab, modcon::ModConRaycastSet, TabState, TabType, TabViewer},
 };
 
@@ -77,6 +77,7 @@ fn main() {
         .add_plugin(RetroAssetPlugin)
         .add_plugin(MaterialPlugin::<CustomMaterial>::default())
         .add_plugin(EguiPlugin)
+        .add_plugin(GridPlugin)
         // Ray casting
         .add_plugin(DefaultRaycastingPlugin::<ModConRaycastSet>::default())
         .insert_resource(DefaultPluginState::<ModConRaycastSet>::default().with_debug_cursor())

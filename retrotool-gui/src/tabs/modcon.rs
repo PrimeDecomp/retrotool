@@ -20,6 +20,7 @@ use crate::{
     material::CustomMaterial,
     render::{
         camera::ModelCamera,
+        grid::GridSettings,
         model::{convert_transform, load_model},
         TemporaryLabel,
     },
@@ -340,20 +341,20 @@ impl SystemTab for ModConTab {
         };
         let mut entity = commands.spawn((
             Camera3dBundle {
-                camera_3d: Camera3d {
-                    clear_color: if state.render_layer == 0 {
-                        ClearColorConfig::Default
-                    } else {
-                        ClearColorConfig::None
-                    },
-                    ..default()
-                },
+                camera_3d: Camera3d { clear_color: ClearColorConfig::None, ..default() },
                 camera: camera.clone(),
                 tonemapping: Tonemapping::TonyMcMapface,
                 transform: self.camera.transform,
                 ..default()
             },
             // BloomSettings::default(),
+            GridSettings {
+                clear_color: if state.render_layer == 0 {
+                    ClearColorConfig::Default
+                } else {
+                    ClearColorConfig::None
+                },
+            },
             RenderLayers::layer(state.render_layer),
             TemporaryLabel,
         ));

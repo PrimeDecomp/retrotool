@@ -24,6 +24,7 @@ use crate::{
     material::CustomMaterial,
     render::{
         camera::ModelCamera,
+        grid::GridSettings,
         model::{convert_aabb, load_model, ModelLod},
         TemporaryLabel,
     },
@@ -148,7 +149,7 @@ impl SystemTab for ModelTab {
                 .spawn(MaterialMeshBundle::<CustomMaterial> {
                     mesh: mesh.mesh,
                     material,
-                    transform: Transform::from_translation((-built.aabb.center).into()),
+                    // transform: Transform::from_translation((-built.aabb.center).into()),
                     ..default()
                 })
                 .id();
@@ -161,7 +162,7 @@ impl SystemTab for ModelTab {
             });
         }
         self.loaded = Some(LoadedModel { meshes, lod: built.lod, materials: built.materials });
-        self.camera.init(&convert_aabb(&asset.inner.head.bounds), false);
+        self.camera.init(&convert_aabb(&asset.inner.head.bounds), true);
         self.diffuse_map = server.load("papermill_diffuse_rgb9e5_zstd.ktx2");
         self.specular_map = server.load("papermill_specular_rgb9e5_zstd.ktx2");
 
@@ -211,14 +212,7 @@ impl SystemTab for ModelTab {
         if let Some(loaded) = &mut self.loaded {
             commands.spawn((
                 Camera3dBundle {
-                    camera_3d: Camera3d {
-                        clear_color: if state.render_layer == 0 {
-                            ClearColorConfig::Default
-                        } else {
-                            ClearColorConfig::None
-                        },
-                        ..default()
-                    },
+                    camera_3d: Camera3d { clear_color: ClearColorConfig::None, ..default() },
                     camera: Camera {
                         viewport: Some(viewport),
                         order: state.render_layer as isize,
@@ -233,6 +227,13 @@ impl SystemTab for ModelTab {
                 EnvironmentMapLight {
                     diffuse_map: self.diffuse_map.clone(),
                     specular_map: self.specular_map.clone(),
+                },
+                GridSettings {
+                    clear_color: if state.render_layer == 0 {
+                        ClearColorConfig::Default
+                    } else {
+                        ClearColorConfig::None
+                    },
                 },
                 RenderLayers::layer(state.render_layer),
                 TemporaryLabel,

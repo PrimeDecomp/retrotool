@@ -2898,6 +2898,7 @@ dependencies = [
  "retrolib",
  "uuid",
  "walkdir",
+ "wgpu",
  "wgpu-types",
 ]
 
