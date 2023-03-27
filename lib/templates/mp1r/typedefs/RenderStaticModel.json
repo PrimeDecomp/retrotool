@@ -1,0 +1,33 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "RenderStaticModel",
+  "type": "property_list",
+  "properties": {
+    "0xBA315753": {
+      "name": "DepthBiasOverride",
+      "type": "struct",
+      "struct": "DepthBiasOverride"
+    },
+    "0xC88CFE7C": {
+      "name": "RenderStaticModelFlags",
+      "type": "struct",
+      "struct": "RenderStaticModelFlags"
+    },
+    "0x7721158B": {
+      "name": "RenderStaticModelSort",
+      "type": "struct",
+      "struct": "RenderStaticModelSort"
+    },
+    "0xFE69F600": {
+      "name": "MaterialDataOverride",
+      "type": "list",
+      "element": {
+        "type": "struct",
+        "struct": "MaterialDataOverride"
+      }
+    },
+    "0xE8BDC12B": {
+      "type": "id"
+    }
+  }
+}

@@ -289,7 +289,7 @@ impl Package<'_> {
 
         // Validate RFRM
         {
-            let (form, _, _) = FormDescriptor::slice(&data, Endian::Little)?;
+            let (form, _, _) = FormDescriptor::slice(&data, e)?;
             ensure!(asset.asset_type == form.id);
             ensure!(asset.version == form.reader_version);
             ensure!(asset.other_version == form.writer_version);
@@ -302,15 +302,11 @@ impl Package<'_> {
 
         // Write custom footer
         FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }
-            .write(&mut w, Endian::Little, |w| {
-            ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(
-                w,
-                Endian::Little,
-                |w| {
-                    w.write_le(&AssetInfo { id, compression_mode, orig_offset: asset.offset })?;
-                    Ok(())
-                },
-            )?;
+            .write(&mut w, e, |w| {
+            ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(w, e, |w| {
+                w.write_le(&AssetInfo { id, compression_mode, orig_offset: asset.offset })?;
+                Ok(())
+            })?;
             if let Some(meta) = meta {
                 let meta_chunk =
                     ChunkDescriptor { id: K_CHUNK_META, size: meta.len() as u64, unk: 0, skip: 0 };
@@ -403,7 +399,7 @@ impl Package<'_> {
 
             // Validate RFRM
             {
-                let (form, _, _) = FormDescriptor::slice(&data, Endian::Little)?;
+                let (form, _, _) = FormDescriptor::slice(&data, e)?;
                 ensure!(asset_entry.asset_type == form.id);
                 ensure!(asset_entry.version == form.reader_version);
                 ensure!(asset_entry.other_version == form.writer_version);

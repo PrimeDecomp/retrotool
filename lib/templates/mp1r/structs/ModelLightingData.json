@@ -1,0 +1,25 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ModelLightingData",
+  "type": "property_list",
+  "properties": {
+    "0x1AC9C6F6": {
+      "type": "color"
+    },
+    "0xB65B2EF5": {
+      "type": "i32"
+    },
+    "0xB24E2719": {
+      "type": "bool"
+    },
+    "0x9AB5FD2B": {
+      "type": "bool"
+    },
+    "0x0B639A58": {
+      "type": "bool"
+    },
+    "0x2331CBAA": {
+      "type": "bool"
+    }
+  }
+}

@@ -18,8 +18,8 @@ use crate::{
     icon,
     loaders::{model::ModelAsset, package::PackageDirectory, texture::TextureAsset},
     tabs::{
-        lightprobe::LightProbeTab, modcon::ModConTab, model::ModelTab, texture::TextureTab,
-        SystemTab, TabState, TabType,
+        lightprobe::LightProbeTab, modcon::ModConTab, model::ModelTab, room::RoomTab,
+        texture::TextureTab, SystemTab, TabState, TabType,
     },
     AssetRef,
 };
@@ -221,7 +221,7 @@ impl SystemTab for ProjectTab {
                                     "{}.{}",
                                     entry.id, entry.kind
                                 ));
-                                state.open_tab = Some(TabType::Texture(Box::new(TextureTab {
+                                state.open_tab(TabType::Texture(Box::new(TextureTab {
                                     asset_ref,
                                     handle,
                                     ..default()
@@ -230,7 +230,7 @@ impl SystemTab for ProjectTab {
                             K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {
                                 let handle = server
                                     .load::<ModelAsset, _>(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab = Some(TabType::Model(Box::new(ModelTab {
+                                state.open_tab(TabType::Model(Box::new(ModelTab {
                                     asset_ref,
                                     handle,
                                     ..default()
@@ -238,7 +238,7 @@ impl SystemTab for ProjectTab {
                             }
                             K_FORM_MCON => {
                                 let handle = server.load(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab = Some(TabType::ModCon(Box::new(ModConTab {
+                                state.open_tab(TabType::ModCon(Box::new(ModConTab {
                                     asset_ref,
                                     handle,
                                     ..default()
@@ -246,12 +246,19 @@ impl SystemTab for ProjectTab {
                             }
                             K_FORM_LTPB => {
                                 let handle = server.load(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab =
-                                    Some(TabType::LightProbe(Box::new(LightProbeTab {
-                                        asset_ref,
-                                        handle,
-                                        ..default()
-                                    })));
+                                state.open_tab(TabType::LightProbe(Box::new(LightProbeTab {
+                                    asset_ref,
+                                    handle,
+                                    ..default()
+                                })));
+                            }
+                            K_FORM_ROOM => {
+                                let handle = server.load(format!("{}.{}", entry.id, entry.kind));
+                                state.open_tab(TabType::Room(Box::new(RoomTab {
+                                    asset_ref,
+                                    handle,
+                                    ..default()
+                                })));
                             }
                             _ => {}
                         }

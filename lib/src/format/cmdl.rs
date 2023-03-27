@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::{
     format::{
-        chunk::ChunkDescriptor, rfrm::FormDescriptor, CAABox, CColor4f, CMatrix4f,
-        CStringFixedName, CVector4i, FourCC,
+        rfrm::FormDescriptor, slice_chunks, CAABox, CColor4f, CMatrix4f, CStringFixed, CVector4i,
+        FourCC,
     },
     util::compression::decompress_buffer,
 };
@@ -356,8 +356,8 @@ pub struct SMaterialChunk {
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct CMaterialCache {
-    #[br(try_map = CStringFixedName::into_string)]
-    #[bw(map = CStringFixedName::from_string)]
+    #[br(try_map = CStringFixed::into_string)]
+    #[bw(map = CStringFixed::from_string)]
     pub name: String,
     #[br(map = Uuid::from_bytes_le)]
     #[bw(map = Uuid::to_bytes_le)]
@@ -824,7 +824,7 @@ pub struct ModelData {
 
 impl ModelData {
     pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<ModelData> {
-        let (cmdl_desc, mut cmdl_data, _) = FormDescriptor::slice(data, Endian::Little)?;
+        let (cmdl_desc, cmdl_data, _) = FormDescriptor::slice(data, e)?;
         match cmdl_desc.id {
             K_FORM_CMDL => {
                 ensure!(cmdl_desc.reader_version == 114);
@@ -850,23 +850,26 @@ impl ModelData {
         let mut mesh: Option<SMeshLoadInformation> = None;
         let mut vbuf: Option<SVertexBufferInfoSection> = None;
         let mut ibuf: Option<SIndexBufferInfoSection> = None;
-        while !cmdl_data.is_empty() {
-            let (chunk_desc, chunk_data, remain) = ChunkDescriptor::slice(cmdl_data, e)?;
-            match chunk_desc.id {
-                K_CHUNK_HEAD | K_CHUNK_SKHD | K_CHUNK_WDHD => {
-                    head = Some(Cursor::new(chunk_data).read_type(e)?)
+        slice_chunks(
+            cmdl_data,
+            e,
+            |desc, data| {
+                match desc.id {
+                    K_CHUNK_HEAD | K_CHUNK_SKHD | K_CHUNK_WDHD => {
+                        head = Some(Cursor::new(data).read_type(e)?)
+                    }
+                    K_CHUNK_MTRL => mtrl = Some(Cursor::new(data).read_type(e)?),
+                    K_CHUNK_MESH => mesh = Some(Cursor::new(data).read_type(e)?),
+                    K_CHUNK_VBUF => vbuf = Some(Cursor::new(data).read_type(e)?),
+                    K_CHUNK_IBUF => ibuf = Some(Cursor::new(data).read_type(e)?),
+                    // GPU data decompressed via META
+                    K_CHUNK_GPU => {}
+                    id => bail!("Unknown {} chunk {id:?}", cmdl_desc.id),
                 }
-                K_CHUNK_MTRL => mtrl = Some(Cursor::new(chunk_data).read_type(e)?),
-                K_CHUNK_MESH => mesh = Some(Cursor::new(chunk_data).read_type(e)?),
-                K_CHUNK_VBUF => vbuf = Some(Cursor::new(chunk_data).read_type(e)?),
-                K_CHUNK_IBUF => ibuf = Some(Cursor::new(chunk_data).read_type(e)?),
-                // GPU data decompressed via META
-                K_CHUNK_GPU => {}
-                id => bail!("Unknown model chunk ID {id:?}"),
-            }
-            cmdl_data = remain;
-        }
-
+                Ok(())
+            },
+            |form, _data| bail!("Unknown {} form {:?}", cmdl_desc.id, form.id),
+        )?;
         let Some(head) = head else { bail!("Failed to locate HEAD") };
         let Some(mtrl) = mtrl else { bail!("Failed to locate MTRL") };
         let Some(mesh) = mesh else { bail!("Failed to locate MESH") };

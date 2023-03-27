@@ -55,6 +55,23 @@ impl UiTexture {
         Self { _image: handle, texture_id: egui_textures.add_image(weak_handle), width, height }
     }
 
+    pub fn from_handle(
+        handle: Handle<Image>,
+        images: &mut Assets<Image>,
+        egui_textures: &mut EguiUserTextures,
+    ) -> Option<Self> {
+        let Some(image) = images.get(&handle) else { return None; };
+        let width = image.texture_descriptor.size.width;
+        let height = image.texture_descriptor.size.height;
+        let weak_handle = handle.clone_weak();
+        Some(Self {
+            _image: handle,
+            texture_id: egui_textures.add_image(weak_handle),
+            width,
+            height,
+        })
+    }
+
     #[allow(dead_code)]
     pub fn image(&self) -> egui::Image {
         egui::Image::new(self.texture_id, egui::Vec2::new(self.width as f32, self.height as f32))

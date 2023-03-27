@@ -9,6 +9,8 @@ use bevy::{
 use bevy_egui::EguiContext;
 use bevy_mod_raycast::{Intersection, RaycastMesh, RaycastSource};
 use egui::{Sense, Widget};
+use retrolib::format::SumBy;
+use uuid::Uuid;
 
 use crate::{
     icon,
@@ -39,6 +41,7 @@ pub struct ModelInfo {
 }
 
 pub struct ModConTab {
+    pub tab_id: Uuid,
     pub asset_ref: AssetRef,
     pub handle: Handle<ModConAsset>,
     pub models: Vec<ModelInfo>,
@@ -46,12 +49,13 @@ pub struct ModConTab {
     pub diffuse_map: Handle<Image>,
     pub specular_map: Handle<Image>,
     pub env_light: bool,
-    pub selected_model: Option<ModelLabel>,
+    pub selected_model: Option<AssetRef>,
 }
 
 impl Default for ModConTab {
     fn default() -> Self {
         Self {
+            tab_id: Uuid::new_v4(),
             asset_ref: default(),
             handle: default(),
             models: default(),
@@ -100,6 +104,7 @@ pub struct ModConRaycastSet;
 #[derive(Component, Clone, Debug)]
 pub struct ModelLabel {
     pub asset_ref: AssetRef,
+    pub tab_id: Uuid,
 }
 
 impl SystemTab for ModConTab {
@@ -119,7 +124,7 @@ impl SystemTab for ModConTab {
         SRes<Assets<ModelAsset>>,
         SRes<Assets<ModConAsset>>,
         SQuery<Read<Parent>, With<Intersection<ModConRaycastSet>>>,
-        SQuery<Read<ModelLabel>>,
+        SQuery<(Read<ModelLabel>, Read<Children>)>,
     );
 
     fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
@@ -194,7 +199,7 @@ impl SystemTab for ModConTab {
                 let entity = commands
                     .spawn((
                         SpatialBundle { transform, visibility: Visibility::Hidden, ..default() },
-                        ModelLabel { asset_ref: asset.asset_ref },
+                        ModelLabel { asset_ref: asset.asset_ref, tab_id: self.tab_id },
                     ))
                     .with_children(|builder| {
                         for idx in built.lod[0].meshes.iter() {
@@ -295,18 +300,18 @@ impl SystemTab for ModConTab {
         }
 
         if let Some(parent) = intersection_query.iter().next() {
-            self.selected_model = Some(model_query.get(parent.get()).unwrap().clone());
+            let (label, _) = model_query.get(parent.get()).unwrap();
+            if label.tab_id == self.tab_id {
+                self.selected_model = Some(label.asset_ref);
+            }
         }
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical().max_height(rect.height() * 0.25).show(ui, |ui| {
                 ui.checkbox(&mut self.env_light, "Environment lighting");
                 ui.label(format!("Models: {}", self.models.len()));
-                ui.label(format!(
-                    "Instances: {}",
-                    self.models.iter().map(|m| m.loaded.len()).sum::<usize>()
-                ));
+                ui.label(format!("Instances: {}", self.models.sum_by(|m| m.loaded.len())));
                 if let Some(selected) = &self.selected_model {
-                    ui.label(format!("Hovering: {}", selected.asset_ref.id));
+                    ui.label(format!("Hovering: {}", selected.id));
                 }
             });
         });
@@ -315,17 +320,16 @@ impl SystemTab for ModConTab {
             let mut shown = false;
             response = response.context_menu(|ui| {
                 if ui.button("Open in new tab").clicked() {
-                    let handle = server
-                        .load(format!("{}.{}", selected.asset_ref.id, selected.asset_ref.kind));
-                    state.open_tab = Some(TabType::Model(Box::new(ModelTab {
-                        asset_ref: selected.asset_ref,
+                    let handle = server.load(format!("{}.{}", selected.id, selected.kind));
+                    state.open_tab(TabType::Model(Box::new(ModelTab {
+                        asset_ref: *selected,
                         handle,
                         ..default()
                     })));
                     ui.close_menu();
                 }
                 if ui.button("Copy GUID").clicked() {
-                    ui.output_mut(|out| out.copied_text = format!("{}", selected.asset_ref.id));
+                    ui.output_mut(|out| out.copied_text = format!("{}", selected.id));
                     ui.close_menu();
                 }
                 shown = true;
@@ -366,6 +370,7 @@ impl SystemTab for ModConTab {
                 specular_map: self.specular_map.clone(),
             });
         }
+        let mut is_raycasting = false;
         if response.hovered() {
             if let Some(pos) = ui.input(|i| {
                 i.pointer.hover_pos().map(|pos| Vec2::new(pos.x, i.screen_rect.height() - pos.y))
@@ -375,6 +380,7 @@ impl SystemTab for ModConTab {
                     &camera,
                     &GlobalTransform::default(),
                 ));
+                is_raycasting = true;
             }
         }
         // FIXME: https://github.com/bevyengine/bevy/issues/3462
@@ -394,10 +400,23 @@ impl SystemTab for ModConTab {
         for info in &self.models {
             for model in &info.loaded {
                 if let Some(mut commands) = commands.get_entity(model.entity) {
-                    commands.insert((
-                        if model.visible { Visibility::Visible } else { Visibility::Hidden },
-                        RenderLayers::layer(state.render_layer),
-                    ));
+                    commands.insert(if model.visible {
+                        Visibility::Visible
+                    } else {
+                        Visibility::Hidden
+                    });
+                }
+                if let Ok((_, children)) = model_query.get(model.entity) {
+                    for &child in children.iter() {
+                        if let Some(mut commands) = commands.get_entity(child) {
+                            commands.insert(RenderLayers::layer(state.render_layer));
+                            if is_raycasting {
+                                commands.insert(RaycastMesh::<ModConRaycastSet>::default());
+                            } else {
+                                commands.remove::<RaycastMesh<ModConRaycastSet>>();
+                            }
+                        }
+                    }
                 }
             }
         }

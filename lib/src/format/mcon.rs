@@ -63,7 +63,7 @@ pub struct ModConData {
 
 impl ModConData {
     pub fn slice(data: &[u8], e: Endian) -> Result<Self> {
-        let (mcon_desc, mut mcon_data, _) = FormDescriptor::slice(data, Endian::Little)?;
+        let (mcon_desc, mut mcon_data, _) = FormDescriptor::slice(data, e)?;
         ensure!(mcon_desc.id == K_FORM_MCON);
         ensure!(mcon_desc.reader_version == 41);
         ensure!(mcon_desc.writer_version == 44);

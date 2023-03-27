@@ -591,10 +591,13 @@ impl TextureData {
         let meta: STextureMetaData = Cursor::new(meta).read_type(e)?;
         let mut buffer = vec![0u8; meta.decompressed_size as usize];
         for info in &meta.buffers {
-            let read =
-                meta.info.iter().find(|i| i.index as u32 == info.index).ok_or_else(|| {
-                    anyhow!("Failed to locate read info for buffer {}", info.index)
-                })?;
+            let (read_idx, read) = meta
+                .info
+                .iter()
+                .enumerate()
+                .find(|(_, i)| i.index as u32 == info.index)
+                .ok_or_else(|| anyhow!("Failed to locate read info for buffer {}", info.index))?;
+            ensure!(read.index as usize == read_idx); // do these ever differ?
             let read_buf = &data[read.offset as usize..(read.offset + read.size) as usize];
             let comp_buf = &read_buf[info.offset as usize..(info.offset + info.size) as usize];
             decompress_into(

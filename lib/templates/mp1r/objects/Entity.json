@@ -1,0 +1,22 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "EntityProperties",
+  "type": "struct",
+  "elements": [
+    {
+      "type": "u8"
+    },
+    {
+      "type": "u8"
+    },
+    {
+      "type": "vector"
+    },
+    {
+      "type": "vector"
+    },
+    {
+      "type": "vector"
+    }
+  ]
+}

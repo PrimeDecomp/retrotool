@@ -21,7 +21,7 @@ pub const K_CHUNK_NAME: FourCC = FourCC(*b"NAME");
 /// Locate the meta section in extracted files
 pub fn locate_meta(file_data: &[u8], e: Endian) -> Result<&[u8]> {
     let (_, _, remain) = FormDescriptor::slice(file_data, e)?;
-    let (foot_desc, mut foot_data, remain) = FormDescriptor::slice(remain, Endian::Little)?;
+    let (foot_desc, mut foot_data, remain) = FormDescriptor::slice(remain, e)?;
     ensure!(foot_desc.id == K_FORM_FOOT);
     ensure!(foot_desc.reader_version == 1);
     ensure!(foot_desc.writer_version == 1);
@@ -40,7 +40,7 @@ pub fn locate_meta(file_data: &[u8], e: Endian) -> Result<&[u8]> {
 /// Locate the asset ID in extracted files
 pub fn locate_asset_id(file_data: &[u8], e: Endian) -> Result<Uuid> {
     let (_, _, remain) = FormDescriptor::slice(file_data, e)?;
-    let (foot_desc, mut foot_data, remain) = FormDescriptor::slice(remain, Endian::Little)?;
+    let (foot_desc, mut foot_data, remain) = FormDescriptor::slice(remain, e)?;
     ensure!(foot_desc.id == K_FORM_FOOT);
     ensure!(foot_desc.reader_version == 1);
     ensure!(foot_desc.writer_version == 1);

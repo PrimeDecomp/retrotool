@@ -1,3 +1,5 @@
+#![allow(clippy::useless_conversion)] // for TaggedVec / VecIndex
+
 pub mod chunk;
 pub mod cmdl;
 pub mod foot;
@@ -6,18 +8,27 @@ pub mod mcon;
 pub mod mtrl;
 pub mod pack;
 pub mod rfrm;
+pub mod room;
 pub mod txtr;
 
 use std::{
-    fmt::{Debug, Display, Formatter, Write},
+    fmt::{Debug, Display, Formatter, Write as FmtWrite},
+    io::{Read, Seek, Write},
     marker::PhantomData,
-    num::TryFromIntError,
     string::FromUtf8Error,
 };
 
-use binrw::{binrw, BinRead, BinWrite};
+use anyhow::Result;
+use binrw::{binrw, BinRead, BinReaderExt, BinResult, BinWrite, BinWriterExt, Endian};
+use uuid::Uuid;
 
-use crate::array_ref;
+use crate::{
+    array_ref,
+    format::{
+        chunk::ChunkDescriptor,
+        rfrm::{FormDescriptor, K_CHUNK_RFRM},
+    },
+};
 
 #[binrw]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Default)]
@@ -362,14 +373,14 @@ pub struct COBBox {
 
 #[binrw]
 #[derive(Clone, Debug, Default)]
-pub struct CStringFixedName {
+pub struct CStringFixed {
     #[bw(try_calc = text.len().try_into())]
     pub size: u32,
     #[br(count = size)]
     pub text: Vec<u8>,
 }
 
-impl CStringFixedName {
+impl CStringFixed {
     fn from_string(str: &String) -> Self {
         #[allow(clippy::needless_update)]
         Self { text: str.as_bytes().to_vec(), ..Default::default() }
@@ -378,21 +389,34 @@ impl CStringFixedName {
     fn into_string(self) -> Result<String, FromUtf8Error> { String::from_utf8(self.text) }
 }
 
+trait VecIndex {
+    fn from_usize(value: usize) -> Self;
+    fn into_usize(self) -> usize;
+}
+
+macro_rules! vec_index {
+    ($($type:ident),*) => {
+        $(impl VecIndex for $type {
+            #[inline]
+            fn from_usize(value: usize) -> Self { value as Self }
+
+            #[inline]
+            fn into_usize(self) -> usize { self as usize }
+        })*
+    };
+}
+vec_index!(u8, u16, u32, u64);
+
 #[binrw]
 #[derive(Clone, Debug, Default)]
 struct TaggedVec<C, T>
 where
-    C: for<'a> BinRead<Args<'a> = ()>
-        + for<'a> BinWrite<Args<'a> = ()>
-        + Copy
-        + TryFrom<usize, Error = TryFromIntError>
-        + 'static,
+    C: for<'a> BinRead<Args<'a> = ()> + for<'a> BinWrite<Args<'a> = ()> + Copy + VecIndex + 'static,
     T: for<'a> BinRead<Args<'a> = ()> + for<'a> BinWrite<Args<'a> = ()> + 'static,
-    usize: TryFrom<C, Error = TryFromIntError>,
 {
-    #[bw(try_calc(data.len().try_into()))]
+    #[bw(calc(C::from_usize(data.len())))]
     count: C,
-    #[br(count(count))]
+    #[br(count(count.into_usize()))]
     data: Vec<T>,
     _marker: PhantomData<C>,
 }
@@ -403,14 +427,112 @@ where
         + for<'a> BinWrite<Args<'a> = ()>
         + Copy
         + Default
-        + TryFrom<usize, Error = TryFromIntError>
+        + VecIndex
         + 'static,
     T: for<'a> BinRead<Args<'a> = ()> + for<'a> BinWrite<Args<'a> = ()> + Default + 'static,
-    usize: TryFrom<C, Error = TryFromIntError>,
 {
     #[allow(dead_code)]
     fn new(inner: Vec<T>) -> Self {
         #[allow(clippy::needless_update)]
         Self { data: inner, ..Default::default() }
     }
+}
+
+pub fn slice_chunks<ChunkCallback, FormCallback>(
+    mut data: &[u8],
+    e: Endian,
+    mut chunk_cb: ChunkCallback,
+    mut form_cb: FormCallback,
+) -> Result<()>
+where
+    ChunkCallback: FnMut(&ChunkDescriptor, &[u8]) -> Result<()>,
+    FormCallback: FnMut(&FormDescriptor, &[u8]) -> Result<()>,
+{
+    while !data.is_empty() {
+        if peek_four_cc(data) == K_CHUNK_RFRM {
+            let (desc, form_data, remain) = FormDescriptor::slice(data, e)?;
+            form_cb(&desc, form_data)?;
+            data = remain;
+        } else {
+            let (desc, chunk_data, remain) = ChunkDescriptor::slice(data, e)?;
+            chunk_cb(&desc, chunk_data)?;
+            data = remain;
+        }
+    }
+    Ok(())
+}
+
+pub trait SumBy {
+    type Item;
+
+    fn sum_by<R>(&self, f: impl Fn(&Self::Item) -> R) -> R
+    where R: std::ops::Add<Output = R> + Default;
+}
+
+impl<T> SumBy for [T] {
+    type Item = T;
+
+    fn sum_by<R>(&self, f: impl Fn(&Self::Item) -> R) -> R
+    where R: std::ops::Add<Output = R> + Default {
+        self.iter().map(f).fold(R::default(), R::add)
+    }
+}
+
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Default)]
+#[repr(transparent)]
+pub struct CObjectId(Uuid);
+
+impl BinRead for CObjectId {
+    type Args<'a> = <uuid::Bytes as BinRead>::Args<'a>;
+
+    fn read_options<R: Read + Seek>(
+        reader: &mut R,
+        endian: Endian,
+        args: Self::Args<'_>,
+    ) -> BinResult<Self> {
+        let bytes: uuid::Bytes = reader.read_type_args(endian, args)?;
+        Ok(Self(match endian {
+            Endian::Big => Uuid::from_bytes(bytes),
+            Endian::Little => Uuid::from_bytes_le(bytes),
+        }))
+    }
+}
+
+impl BinWrite for CObjectId {
+    type Args<'a> = <uuid::Bytes as BinWrite>::Args<'a>;
+
+    fn write_options<W: Write + Seek>(
+        &self,
+        writer: &mut W,
+        endian: Endian,
+        args: Self::Args<'_>,
+    ) -> BinResult<()> {
+        let bytes = match endian {
+            Endian::Big => *self.0.as_bytes(),
+            Endian::Little => self.0.to_bytes_le(),
+        };
+        writer.write_type_args(&bytes, endian, args)
+    }
+}
+
+impl CObjectId {
+    pub fn is_nil(&self) -> bool { self.0.is_nil() }
+
+    pub fn into_inner(self) -> Uuid { self.0 }
+}
+
+impl From<Uuid> for CObjectId {
+    fn from(value: Uuid) -> Self { Self(value) }
+}
+
+impl From<CObjectId> for Uuid {
+    fn from(value: CObjectId) -> Self { value.0 }
+}
+
+impl Display for CObjectId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+
+impl Debug for CObjectId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "{:?}", self.0) }
 }

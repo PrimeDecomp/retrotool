@@ -30,6 +30,7 @@ use crate::{
         TemporaryLabel,
     },
     tabs::{
+        property_with_value,
         texture::{TextureTab, UiTexture},
         SystemTab, TabType,
     },
@@ -344,20 +345,6 @@ impl SystemTab for ModelTab {
     fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
 }
 
-fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) {
-    ui.horizontal(|ui| {
-        ui.label(format!("{}:", name));
-        if egui::Label::new(&value)
-            .sense(Sense::click())
-            .ui(ui)
-            .on_hover_text_at_pointer("Click to copy")
-            .clicked()
-        {
-            ui.output_mut(|out| out.copied_text = value);
-        }
-    });
-}
-
 fn texture_ui(
     ui: &mut egui::Ui,
     texture: &CMaterialTextureTokenData,
@@ -374,7 +361,7 @@ fn texture_ui(
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .clicked()
         {
-            state.open_tab = Some(TabType::Texture(Box::new(TextureTab {
+            state.open_tab(TabType::Texture(Box::new(TextureTab {
                 asset_ref: AssetRef { id: texture.id, kind: K_FORM_TXTR },
                 handle: server.load(format!("{}.{}", texture.id, K_FORM_TXTR)),
                 ..default()

@@ -15,7 +15,8 @@ use bevy::{
 };
 use bevy_egui::{egui, EguiContext, EguiContexts, EguiPlugin};
 use bevy_mod_raycast::{DefaultPluginState, DefaultRaycastingPlugin};
-use egui::{FontFamily, FontId};
+use egui::{FontFamily, FontId, Frame, Rounding};
+use egui_dock::{TabIndex, TabViewer as DockTabViewer};
 use retrolib::format::FourCC;
 use uuid::Uuid;
 use walkdir::{DirEntry, WalkDir};
@@ -110,7 +111,7 @@ struct UiState {
 
 impl Default for UiState {
     fn default() -> Self {
-        let mut tree = egui_dock::Tree::new(vec![TabType::Empty]);
+        let mut tree = egui_dock::Tree::new(vec![TabType::Splash(default())]);
         tree.split_left(egui_dock::NodeIndex::root(), 0.25, vec![TabType::Project(default())]);
         Self {
             tree,
@@ -158,29 +159,34 @@ fn load_files(
 }
 
 fn bottom_bar_system(mut egui_ctx: EguiContexts, diagnostics: Res<Diagnostics>) {
-    egui::TopBottomPanel::bottom("bottom_panel").show(egui_ctx.ctx_mut(), |ui| {
-        ui.horizontal(|ui| {
-            ui.label(format!(
-                "[FPS {:.0}] [Loaded Textures: {} | Models: {} | Entities: {}]",
-                diagnostics
-                    .get(FrameTimeDiagnosticsPlugin::FPS)
-                    .and_then(|d| d.smoothed())
-                    .unwrap_or_default(),
-                diagnostics
-                    .get_measurement(AssetCountDiagnosticsPlugin::<TextureAsset>::diagnostic_id())
-                    .map(|d| d.value)
-                    .unwrap_or_default(),
-                diagnostics
-                    .get_measurement(AssetCountDiagnosticsPlugin::<ModelAsset>::diagnostic_id())
-                    .map(|d| d.value)
-                    .unwrap_or_default(),
-                diagnostics
-                    .get_measurement(EntityCountDiagnosticsPlugin::ENTITY_COUNT)
-                    .map(|d| d.value)
-                    .unwrap_or_default(),
-            ));
-        });
-    });
+    egui::TopBottomPanel::bottom("bottom_panel").show_separator_line(false).show(
+        egui_ctx.ctx_mut(),
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "[FPS {:.0}] [Loaded Textures: {} | Models: {} | Entities: {}]",
+                    diagnostics
+                        .get(FrameTimeDiagnosticsPlugin::FPS)
+                        .and_then(|d| d.smoothed())
+                        .unwrap_or_default(),
+                    diagnostics
+                        .get_measurement(
+                            AssetCountDiagnosticsPlugin::<TextureAsset>::diagnostic_id()
+                        )
+                        .map(|d| d.value)
+                        .unwrap_or_default(),
+                    diagnostics
+                        .get_measurement(AssetCountDiagnosticsPlugin::<ModelAsset>::diagnostic_id())
+                        .map(|d| d.value)
+                        .unwrap_or_default(),
+                    diagnostics
+                        .get_measurement(EntityCountDiagnosticsPlugin::ENTITY_COUNT)
+                        .map(|d| d.value)
+                        .unwrap_or_default(),
+                ));
+            });
+        },
+    );
 }
 
 fn ui_system(world: &mut World) {
@@ -192,15 +198,19 @@ fn ui_system(world: &mut World) {
         .0
         .clone();
 
-    egui::TopBottomPanel::top("top_panel").show(ctx.get_mut(), |ui| {
-        egui::menu::bar(ui, |ui| {
-            egui::menu::menu_button(ui, "File", |ui| {
-                if ui.button("Quit").clicked() {
-                    world.send_event(AppExit);
-                }
+    let style = ctx.get_mut().style();
+    egui::TopBottomPanel::top("top_panel")
+        .show_separator_line(false)
+        .frame(Frame::side_top_panel(style.as_ref()).fill(egui::Color32::BLACK))
+        .show(ctx.get_mut(), |ui| {
+            egui::menu::bar(ui, |ui| {
+                egui::menu::menu_button(ui, "File", |ui| {
+                    if ui.button("Quit").clicked() {
+                        world.send_event(AppExit);
+                    }
+                });
             });
         });
-    });
 
     world.resource_scope::<UiState, _>(|world, mut ui_state| {
         let mut tab_assets = vec![];
@@ -227,7 +237,16 @@ fn ui_system(world: &mut World) {
                             load_tab(world, &mut ctx, tab.as_mut());
                             tab_assets.push(tab.asset_ref);
                         }
-                        TabType::Empty => {}
+                        TabType::Room(tab) => {
+                            load_tab(world, &mut ctx, tab.as_mut());
+                            tab_assets.push(tab.asset_ref);
+                        }
+                        TabType::Templates(tab) => {
+                            load_tab(world, &mut ctx, tab.as_mut());
+                        }
+                        TabType::Splash(tab) => {
+                            load_tab(world, &mut ctx, tab.as_mut());
+                        }
                     }
                 }
             }
@@ -249,14 +268,60 @@ fn ui_system(world: &mut World) {
                 open_tab: None,
                 viewport: default(),
                 render_layer: 0,
+                close_all: None,
+                close_others: None,
             },
         };
-        egui_dock::DockArea::new(&mut ui_state.tree)
-            .style(egui_dock::Style::from_egui(ctx.get_mut().style().as_ref()))
-            .show(ctx.get_mut(), &mut viewer);
 
-        if let Some(tab) = viewer.state.open_tab {
-            ui_state.tree.push_to_first_leaf(tab);
+        let mut style = egui_dock::Style::from_egui(style.as_ref());
+        const MARGIN: f32 = 5.0;
+        style.border.color = egui::Color32::BLACK;
+        style.border.width = MARGIN * 2.0;
+        style.buttons.add_tab_align = egui_dock::TabAddAlign::Right;
+        style.dock_area_padding = Some(egui::Margin::same(MARGIN));
+        style.separator.color_hovered = egui::Color32::GRAY;
+        style.separator.color_idle = egui::Color32::BLACK;
+        style.separator.width = MARGIN;
+        style.tab_bar.bg_fill = egui::Color32::BLACK;
+        style.tabs.bg_fill_unfocused = style.tabs.bg_fill.gamma_multiply(0.5);
+        style.tabs.fill_tab_bar = true;
+        style.tabs.grabbed_color = style.tabs.bg_fill.gamma_multiply(0.8);
+        style.tabs.rounding = Rounding { nw: MARGIN, ne: MARGIN, sw: 0.0, se: 0.0 };
+        style.tabs.text_align = egui::Align2::CENTER_CENTER;
+        egui_dock::DockArea::new(&mut ui_state.tree).style(style).show_add_buttons(true).show_add_popup(true).show(ctx.get_mut(), &mut viewer);
+
+        if let Some(node) = viewer.state.close_all {
+            if let egui_dock::Node::Leaf { tabs, .. } = &mut ui_state.tree[node] {
+                for tab in tabs.iter_mut() {
+                    viewer.on_close(tab);
+                }
+                tabs.clear();
+                ui_state.tree.remove_leaf(node);
+            }
+        }
+
+        if let Some((node, tab_index)) = viewer.state.close_others {
+            if let egui_dock::Node::Leaf { tabs, .. } = &mut ui_state.tree[node] {
+                let mut i = 0usize;
+                tabs.retain_mut(|tab| {
+                    let keep = i == tab_index.0;
+                    if !keep {
+                        viewer.on_close(tab);
+                    }
+                    i += 1;
+                    keep
+                });
+                ui_state.tree.set_active_tab(node, TabIndex(0));
+            }
+        }
+
+        if let Some(open) = viewer.state.open_tab {
+            if let Some(node) = open.node {
+                ui_state.tree.set_focused_node(node);
+                ui_state.tree.push_to_focused_leaf(open.tab);
+            } else {
+                ui_state.tree.push_to_first_leaf(open.tab);
+            }
         }
 
         if viewer.state.render_layer == 0 {

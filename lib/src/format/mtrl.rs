@@ -26,7 +26,7 @@ pub struct MaterialData {
 
 impl MaterialData {
     pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<MaterialData> {
-        let (mtrl_desc, _, _) = FormDescriptor::slice(data, Endian::Little)?;
+        let (mtrl_desc, _, _) = FormDescriptor::slice(data, e)?;
         ensure!(mtrl_desc.id == K_FORM_MTRL);
         ensure!(mtrl_desc.reader_version == 168);
         ensure!(mtrl_desc.writer_version == 168);

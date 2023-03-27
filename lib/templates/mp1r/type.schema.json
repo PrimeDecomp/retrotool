@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "type"
+  ],
+  "unevaluatedProperties": false,
+  "anyOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "property_list"
+        },
+        "properties": {
+          "type": "object",
+          "patternProperties": {
+            "0x[A-Fa-f0-9]{8}": {
+              "$ref": "#/$defs/property"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "properties"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "struct"
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/property"
+          }
+        }
+      },
+      "required": [
+        "elements"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "enum"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "0x[A-Fa-f0-9]{8}"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "values"
+      ]
+    }
+  ],
+  "$defs": {
+    "property": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "anyOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "struct"
+            },
+            "struct": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "struct"
+          ]
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "typedef"
+            },
+            "supported_types": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "enum"
+            },
+            "enum": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "enum"
+          ]
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "list"
+            },
+            "element": {
+              "$ref": "#/$defs/property"
+            }
+          },
+          "required": [
+            "element"
+          ]
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "id"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "u8"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "u16"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "u32"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "u64"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "i8"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "i16"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "i32"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "i64"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "vector"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "color"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "bool"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "f32"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "f64"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "RenderTargetScene",
+  "type": "enum",
+  "values": [
+    {
+      "name": "Unknown",
+      "value": "0xF6EEB57B"
+    },
+    {
+      "name": "Orthographic",
+      "value": "0x90130085"
+    },
+    {
+      "name": "Perspective",
+      "value": "0x986D766D"
+    }
+  ]
+}

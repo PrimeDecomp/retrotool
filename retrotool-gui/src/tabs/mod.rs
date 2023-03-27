@@ -2,12 +2,17 @@ pub mod lightprobe;
 pub mod modcon;
 pub mod model;
 pub mod project;
+pub mod room;
+pub mod splash;
+pub mod templates;
 pub mod texture;
 
 use bevy::{ecs::system::*, prelude::*, render::camera::*};
 use bevy_egui::EguiContext;
+use egui::Widget;
+use egui_dock::{NodeIndex, Style, TabIndex};
 
-use crate::AssetRef;
+use crate::{icon, AssetRef};
 
 pub enum TabType {
     Project(Box<project::ProjectTab>),
@@ -15,14 +20,27 @@ pub enum TabType {
     Model(Box<model::ModelTab>),
     ModCon(Box<modcon::ModConTab>),
     LightProbe(Box<lightprobe::LightProbeTab>),
-    Empty,
+    Room(Box<room::RoomTab>),
+    Templates(Box<templates::TemplatesTab>),
+    Splash(Box<splash::SplashTab>),
+}
+
+pub struct OpenTab {
+    pub tab: TabType,
+    pub node: Option<NodeIndex>,
 }
 
 pub struct TabState {
     pub open_assets: Vec<AssetRef>,
-    pub open_tab: Option<TabType>,
+    pub open_tab: Option<OpenTab>,
     pub viewport: Viewport,
     pub render_layer: u8,
+    pub close_all: Option<NodeIndex>,
+    pub close_others: Option<(NodeIndex, TabIndex)>,
+}
+
+impl TabState {
+    fn open_tab(&mut self, tab: TabType) { self.open_tab = Some(OpenTab { tab, node: None }); }
 }
 
 pub trait SystemTab {
@@ -85,8 +103,27 @@ impl egui_dock::TabViewer for TabViewer<'_> {
             TabType::Model(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
             TabType::ModCon(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
             TabType::LightProbe(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::Empty => {}
+            TabType::Room(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
+            TabType::Templates(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
+            TabType::Splash(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
         }
+    }
+
+    fn context_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        _tab: &mut Self::Tab,
+        node: NodeIndex,
+        tab_index: TabIndex,
+    ) {
+        if ui.button("Close others in group").clicked() {
+            self.state.close_others = Some((node, tab_index));
+            ui.close_menu();
+        };
+        if ui.button("Close all in group").clicked() {
+            self.state.close_all = Some(node);
+            ui.close_menu();
+        };
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
@@ -96,13 +133,15 @@ impl egui_dock::TabViewer for TabViewer<'_> {
             TabType::Model(tab) => tab.title(),
             TabType::ModCon(tab) => tab.title(),
             TabType::LightProbe(tab) => tab.title(),
-            TabType::Empty => "".into(),
+            TabType::Room(tab) => tab.title(),
+            TabType::Templates(tab) => tab.title(),
+            TabType::Splash(tab) => tab.title(),
         }
     }
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> bool {
         match tab {
-            TabType::Project(_) => false,
+            TabType::Project(_) => true,
             TabType::Texture(tab) => {
                 close_tab(self.world, tab.as_mut());
                 true
@@ -119,11 +158,57 @@ impl egui_dock::TabViewer for TabViewer<'_> {
                 close_tab(self.world, tab.as_mut());
                 true
             }
-            TabType::Empty => false,
+            TabType::Room(tab) => {
+                close_tab(self.world, tab.as_mut());
+                true
+            }
+            TabType::Templates(_) => true,
+            TabType::Splash(tab) => {
+                close_tab(self.world, tab.as_mut());
+                true
+            }
+        }
+    }
+
+    fn add_popup(&mut self, ui: &mut egui::Ui, node: NodeIndex) {
+        ui.set_min_width(100.0);
+        ui.style_mut().visuals.button_frame = false;
+
+        if ui.button(format!("{} Browser", icon::FILEBROWSER)).clicked() {
+            self.state.open_tab =
+                Some(OpenTab { tab: TabType::Project(Box::default()), node: Some(node) });
+        }
+        if ui.button(format!("{} Templates", icon::EDITMODE_HLT)).clicked() {
+            self.state.open_tab = Some(OpenTab {
+                tab: TabType::Templates(Box::new(templates::TemplatesTab::new())),
+                node: Some(node),
+            });
+        }
+    }
+
+    fn inner_margin_override(&self, tab: &Self::Tab, style: &Style) -> egui::Margin {
+        if self.clear_background(tab) {
+            style.default_inner_margin
+        } else {
+            egui::Margin::same(0.0)
         }
     }
 
     fn clear_background(&self, tab: &Self::Tab) -> bool {
-        !matches!(tab, TabType::Empty | TabType::Model(_) | TabType::ModCon(_))
+        !matches!(tab, TabType::Model(_) | TabType::ModCon(_) | TabType::Room(_))
     }
+}
+
+pub fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) {
+    ui.horizontal(|ui| {
+        ui.label(format!("{}:", name));
+        if egui::Label::new(&value)
+            .sense(egui::Sense::click())
+            .ui(ui)
+            .on_hover_text_at_pointer("Click to copy")
+            .clicked()
+        {
+            ui.output_mut(|out| out.copied_text = value);
+        }
+    });
 }

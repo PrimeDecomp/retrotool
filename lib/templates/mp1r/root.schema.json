@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "objects": {
+      "type": "object",
+      "patternProperties": {
+        "0x[A-Fa-f0-9]{8}": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "typedefs": {
+      "type": "object",
+      "patternProperties": {
+        "0x[A-Fa-f0-9]{8}": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "structs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "enums": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "additionalProperties": false
+}

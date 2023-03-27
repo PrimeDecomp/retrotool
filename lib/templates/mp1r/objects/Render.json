@@ -1,0 +1,39 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "Render",
+  "type": "property_list",
+  "properties": {
+    "0x948D7F67": {
+      "name": "RenderProperties",
+      "type": "typedef",
+      "supported_types": [
+        "RenderAnimatedModel",
+        "RenderCharacterModel",
+        "RenderMethodGameMode",
+        "RenderStaticModel",
+        "RenderStaticModelArray",
+        "RenderTexture",
+        "RenderVertexAnimatedModel"
+      ]
+    },
+    "0xBFA1049E": {
+      "name": "RenderTargetScene",
+      "type": "enum",
+      "enum": "RenderTargetScene"
+    },
+    "0x2B1317A0": {
+      "name": "ModelLightingData",
+      "type": "struct",
+      "struct": "ModelLightingData"
+    },
+    "0x8c7307b4": {
+      "type": "i32"
+    },
+    "0x80ec379b": {
+      "type": "bool"
+    },
+    "0x9b56a30e": {
+      "type": "bool"
+    }
+  }
+}
