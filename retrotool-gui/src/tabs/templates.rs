@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use bevy::{ecs::system::SystemParamItem, prelude::*};
+use bevy::ecs::system::SystemParamItem;
 use egui::Widget;
 use retrolib::util::templates::{
     load_type_template, FromRepr, HexU32, IntoRepr, PropertyTemplate, PropertyTemplateType,
