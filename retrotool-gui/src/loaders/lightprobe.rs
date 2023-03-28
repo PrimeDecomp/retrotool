@@ -52,8 +52,6 @@ impl AssetLoader for LightProbeAssetLoader {
             let mut textures = Vec::with_capacity(data.textures.len());
             for (idx, texture_data) in data.textures.into_iter().enumerate() {
                 let result = load_texture_asset(texture_data, &self.supported_formats)?;
-                let image_handle = load_context
-                    .set_labeled_asset(&format!("image_{idx}"), LoadedAsset::new(result.texture));
                 let mut slice_handles = Vec::with_capacity(result.slices.len());
                 for (mip, images) in result.slices.into_iter().enumerate() {
                     let mut handles = Vec::with_capacity(images.len());
@@ -68,7 +66,9 @@ impl AssetLoader for LightProbeAssetLoader {
                 textures.push(TextureAsset {
                     asset_ref: AssetRef { id, kind: K_FORM_LTPB },
                     inner: result.inner,
-                    texture: image_handle,
+                    // 3D BC1 textures are not supported by wgpu
+                    // and we don't use the 3D texture anyway
+                    texture: default(),
                     slices: slice_handles,
                 });
             }

@@ -99,14 +99,6 @@ impl EditorTabSystem for LightProbeTab {
                 ));
 
                 let mip = &self.loaded_textures[txtr_idx][0];
-                if self.loaded_textures.len() > 1 {
-                    ui.label(format!(
-                        "Mipmap size: {}x{}x{}",
-                        mip.width,
-                        mip.height,
-                        mip.texture_ids.len(),
-                    ));
-                }
                 let size = egui::Vec2::new(mip.width as f32, mip.height as f32);
                 let draw_image =
                     |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32, flip: bool| {
