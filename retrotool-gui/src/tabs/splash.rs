@@ -2,12 +2,12 @@ use bevy::{
     ecs::system::{lifetimeless::*, SystemParamItem},
     prelude::*,
 };
-use bevy_egui::{EguiContext, EguiUserTextures};
+use bevy_egui::EguiUserTextures;
 use egui::Widget;
 
 use crate::{
     icon,
-    tabs::{texture::UiTexture, SystemTab, TabState},
+    tabs::{texture::UiTexture, EditorTabSystem, TabState},
 };
 
 #[derive(Default)]
@@ -16,11 +16,11 @@ pub struct SplashTab {
     pub icon_image: Option<Handle<Image>>,
 }
 
-impl SystemTab for SplashTab {
+impl EditorTabSystem for SplashTab {
     type LoadParam = (SRes<AssetServer>, SResMut<Assets<Image>>, SResMut<EguiUserTextures>);
     type UiParam = ();
 
-    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         if self.icon.is_some() {
             return;
         }
@@ -41,7 +41,7 @@ impl SystemTab for SplashTab {
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        _query: SystemParamItem<'_, '_, Self::UiParam>,
+        _query: SystemParamItem<Self::UiParam>,
         _state: &mut TabState,
     ) {
         let icon = match &self.icon {
@@ -68,7 +68,7 @@ impl SystemTab for SplashTab {
         });
     }
 
-    fn title(&mut self) -> egui::WidgetText { format!("{} Splash", icon::HOME).into() }
+    fn title(&self) -> egui::WidgetText { format!("{} Splash", icon::HOME).into() }
 
     fn id(&self) -> String { "splash".into() }
 }

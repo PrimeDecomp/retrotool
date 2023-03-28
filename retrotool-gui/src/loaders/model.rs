@@ -4,7 +4,7 @@ use anyhow::{Error, Result};
 use bevy::{
     asset::{AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadState, LoadedAsset},
     prelude::*,
-    render::{render_resource::SamplerDescriptor, texture::ImageSampler},
+    render::{render_resource::SamplerDescriptor},
     utils::{hashbrown::hash_map::Entry, HashMap},
 };
 use binrw::Endian;
@@ -118,6 +118,7 @@ impl ModelAsset {
         server.get_group_load_state(self.textures.values().map(|h| h.id()))
     }
 
+    #[allow(dead_code)]
     pub fn sampler_data<'asset>(
         &self,
         texture_id: &Uuid,
@@ -131,47 +132,44 @@ impl ModelAsset {
 
     pub fn build_texture_images(
         &mut self,
-        texture_assets: &Assets<TextureAsset>,
-        images: &mut Assets<Image>,
+        texture_assets: &mut Assets<TextureAsset>,
+        _images: &mut Assets<Image>,
     ) {
         // Build sampler descriptors
-        let mut sampler_descriptors = HashMap::<Uuid, SamplerDescriptor>::new();
-        for mat in &self.inner.mtrl.materials {
-            for data in &mat.data {
-                match &data.data {
-                    CMaterialDataInner::Texture(texture) => {
-                        if let Some(usage) = &texture.usage {
-                            let sampler_data = self.sampler_data(&texture.id, texture_assets);
-                            sampler_descriptors.insert(
-                                texture.id,
-                                sampler_descriptor_from_usage(usage, sampler_data),
-                            );
-                        }
-                    }
-                    CMaterialDataInner::LayeredTexture(layers) => {
-                        for texture in &layers.textures {
-                            if let Some(usage) = &texture.usage {
-                                let sampler_data = self.sampler_data(&texture.id, texture_assets);
-                                sampler_descriptors.insert(
-                                    texture.id,
-                                    sampler_descriptor_from_usage(usage, sampler_data),
-                                );
-                            }
-                        }
-                    }
-                    _ => continue,
-                }
-            }
-        }
+        // let mut sampler_descriptors = HashMap::<Uuid, SamplerDescriptor>::new();
+        // for mat in &self.inner.mtrl.materials {
+        //     for data in &mat.data {
+        //         match &data.data {
+        //             CMaterialDataInner::Texture(texture) => {
+        //                 if let Some(usage) = &texture.usage {
+        //                     let sampler_data = self.sampler_data(&texture.id, texture_assets);
+        //                     sampler_descriptors.insert(
+        //                         texture.id,
+        //                         sampler_descriptor_from_usage(usage, sampler_data),
+        //                     );
+        //                 }
+        //             }
+        //             CMaterialDataInner::LayeredTexture(layers) => {
+        //                 for texture in &layers.textures {
+        //                     if let Some(usage) = &texture.usage {
+        //                         let sampler_data = self.sampler_data(&texture.id, texture_assets);
+        //                         sampler_descriptors.insert(
+        //                             texture.id,
+        //                             sampler_descriptor_from_usage(usage, sampler_data),
+        //                         );
+        //                     }
+        //                 }
+        //             }
+        //             _ => continue,
+        //         }
+        //     }
+        // }
 
         // Build texture images
         for (id, handle) in &self.textures {
             let asset = texture_assets.get(handle).unwrap();
-            let mut image = asset.texture.clone();
-            if let Some(desc) = sampler_descriptors.get(id) {
-                image.sampler_descriptor = ImageSampler::Descriptor(desc.clone());
-            }
-            self.texture_images.insert(*id, images.add(image));
+            // TODO: use sampler descriptors
+            self.texture_images.insert(*id, asset.texture.clone());
         }
     }
 
@@ -334,6 +332,7 @@ fn build_material(
     Ok(out_mat)
 }
 
+#[allow(dead_code)]
 fn texture_wrap(wrap: ETextureWrap) -> AddressMode {
     match wrap {
         ETextureWrap::ClampToEdge => AddressMode::ClampToEdge,
@@ -345,6 +344,7 @@ fn texture_wrap(wrap: ETextureWrap) -> AddressMode {
     }
 }
 
+#[allow(dead_code)]
 fn sampler_descriptor_from_usage<'desc>(
     usage: &STextureUsageInfo,
     data: Option<&STextureSamplerData>,

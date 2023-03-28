@@ -1,10 +1,10 @@
 use bevy::{
-    asset::LoadState,
+    asset::{AssetPath, LoadState},
     ecs::system::{lifetimeless::*, *},
     prelude::*,
     render::render_resource::Extent3d,
 };
-use bevy_egui::{EguiContext, EguiUserTextures};
+use bevy_egui::EguiUserTextures;
 use egui::{text::LayoutJob, Color32, TextFormat, Widget};
 use retrolib::format::{
     cmdl::{K_FORM_CMDL, K_FORM_SMDL, K_FORM_WMDL},
@@ -16,10 +16,10 @@ use retrolib::format::{
 
 use crate::{
     icon,
-    loaders::{model::ModelAsset, package::PackageDirectory, texture::TextureAsset},
+    loaders::{package::PackageDirectory, texture::TextureAsset},
     tabs::{
         lightprobe::LightProbeTab, modcon::ModConTab, model::ModelTab, room::RoomTab,
-        texture::TextureTab, SystemTab, TabState, TabType,
+        texture::TextureTab, EditorTabSystem, TabState,
     },
     AssetRef,
 };
@@ -91,17 +91,16 @@ impl ProjectTab {
     }
 }
 
-impl SystemTab for ProjectTab {
+impl EditorTabSystem for ProjectTab {
     type LoadParam = (
         SRes<AssetServer>,
         SRes<Assets<TextureAsset>>,
-        SResMut<Assets<Image>>,
         SResMut<EguiUserTextures>,
     );
     type UiParam = (SRes<AssetServer>, SRes<Assets<PackageDirectory>>);
 
-    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
-        let (server, textures, mut images, mut egui_textures) = query;
+    fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
+        let (server, textures, mut egui_textures) = query;
         if let HoverState::Loading { asset, handle } = &self.hover_state {
             if asset.kind != K_FORM_TXTR {
                 return;
@@ -109,12 +108,11 @@ impl SystemTab for ProjectTab {
             if server.get_load_state(handle) == LoadState::Loaded {
                 let texture_handle = handle.clone().typed::<TextureAsset>();
                 let asset = textures.get(&texture_handle).unwrap();
-                if let Some(image) = asset.slices.first().and_then(|v| v.first()) {
-                    let image_handle = images.add(image.clone());
+                if let Some(image_handle) = asset.slices.first().and_then(|v| v.first()) {
                     let texture_id = egui_textures.add_image(image_handle.clone_weak());
                     self.hover_state = HoverState::Texture {
                         _handle: texture_handle,
-                        _image: image_handle,
+                        _image: image_handle.clone(),
                         size: Extent3d {
                             width: asset.inner.head.width,
                             height: asset.inner.head.height,
@@ -134,7 +132,7 @@ impl SystemTab for ProjectTab {
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        query: SystemParamItem<'_, '_, Self::UiParam>,
+        query: SystemParamItem<Self::UiParam>,
         state: &mut TabState,
     ) {
         let (server, packages) = query;
@@ -215,50 +213,22 @@ impl SystemTab for ProjectTab {
                         });
                     }
                     if response.clicked() {
+                        let path: AssetPath = format!("{}.{}", entry.id, entry.kind).into();
                         match entry.kind {
                             K_FORM_TXTR => {
-                                let handle = server.load::<TextureAsset, _>(format!(
-                                    "{}.{}",
-                                    entry.id, entry.kind
-                                ));
-                                state.open_tab(TabType::Texture(Box::new(TextureTab {
-                                    asset_ref,
-                                    handle,
-                                    ..default()
-                                })));
+                                state.open_tab(TextureTab::new(asset_ref, server.load(path)));
                             }
                             K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {
-                                let handle = server
-                                    .load::<ModelAsset, _>(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab(TabType::Model(Box::new(ModelTab {
-                                    asset_ref,
-                                    handle,
-                                    ..default()
-                                })));
+                                state.open_tab(ModelTab::new(asset_ref, server.load(path)));
                             }
                             K_FORM_MCON => {
-                                let handle = server.load(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab(TabType::ModCon(Box::new(ModConTab {
-                                    asset_ref,
-                                    handle,
-                                    ..default()
-                                })));
+                                state.open_tab(ModConTab::new(asset_ref, server.load(path)));
                             }
                             K_FORM_LTPB => {
-                                let handle = server.load(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab(TabType::LightProbe(Box::new(LightProbeTab {
-                                    asset_ref,
-                                    handle,
-                                    ..default()
-                                })));
+                                state.open_tab(LightProbeTab::new(asset_ref, server.load(path)));
                             }
                             K_FORM_ROOM => {
-                                let handle = server.load(format!("{}.{}", entry.id, entry.kind));
-                                state.open_tab(TabType::Room(Box::new(RoomTab {
-                                    asset_ref,
-                                    handle,
-                                    ..default()
-                                })));
+                                state.open_tab(RoomTab::new(asset_ref, server.load(path)));
                             }
                             _ => {}
                         }
@@ -268,7 +238,7 @@ impl SystemTab for ProjectTab {
         }
     }
 
-    fn title(&mut self) -> egui::WidgetText { format!("{} Browser", icon::FILEBROWSER).into() }
+    fn title(&self) -> egui::WidgetText { format!("{} Browser", icon::FILEBROWSER).into() }
 
     fn id(&self) -> String { "project".to_string() }
 }

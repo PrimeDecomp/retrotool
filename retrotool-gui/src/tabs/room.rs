@@ -4,7 +4,6 @@ use bevy::{
     prelude::*,
     render::{camera::Viewport, view::RenderLayers},
 };
-use bevy_egui::EguiContext;
 use bevy_mod_raycast::{Intersection, RaycastSource};
 use egui::Sense;
 use retrolib::format::room::ConstructedPropertyValue;
@@ -14,7 +13,7 @@ use crate::{
     loaders::{model::ModelAsset, room::RoomAsset, texture::TextureAsset},
     material::CustomMaterial,
     render::{camera::ModelCamera, grid::GridSettings, TemporaryLabel},
-    tabs::{modcon::ModelLabel, property_with_value, SystemTab, TabState},
+    tabs::{modcon::ModelLabel, property_with_value, EditorTabSystem, TabState},
     AssetRef,
 };
 
@@ -28,40 +27,44 @@ impl Default for RoomTab {
     fn default() -> Self { Self { asset_ref: default(), handle: default(), camera: default() } }
 }
 
-// impl RoomTab {
-//     fn get_load_state(
-//         &self,
-//         server: &AssetServer,
-//         assets: &Assets<RoomAsset>,
-//         models: &Assets<ModelAsset>,
-//     ) -> LoadState {
-//         match server.get_load_state(&self.handle) {
-//             LoadState::Loaded => {}
-//             state => return state,
-//         };
-//         let asset = match assets.get(&self.handle) {
-//             Some(v) => v,
-//             None => return LoadState::Failed,
-//         };
-//         // Ensure all dependencies loaded
-//         match server.get_group_load_state(asset.models.iter().map(|h| h.id())) {
-//             LoadState::Loaded => {}
-//             state => return state,
-//         }
-//         for model in &asset.models {
-//             let model = models.get(model).unwrap();
-//             match model.get_load_state(server) {
-//                 LoadState::Loaded => {}
-//                 state => return state,
-//             }
-//         }
-//         LoadState::Loaded
-//     }
-// }
+impl RoomTab {
+    pub fn new(asset_ref: AssetRef, handle: Handle<RoomAsset>) -> Box<Self> {
+        Box::new(Self { asset_ref, handle, ..default() })
+    }
+
+    // fn get_load_state(
+    //     &self,
+    //     server: &AssetServer,
+    //     assets: &Assets<RoomAsset>,
+    //     models: &Assets<ModelAsset>,
+    // ) -> LoadState {
+    //     match server.get_load_state(&self.handle) {
+    //         LoadState::Loaded => {}
+    //         state => return state,
+    //     };
+    //     let asset = match assets.get(&self.handle) {
+    //         Some(v) => v,
+    //         None => return LoadState::Failed,
+    //     };
+    //     // Ensure all dependencies loaded
+    //     match server.get_group_load_state(asset.models.iter().map(|h| h.id())) {
+    //         LoadState::Loaded => {}
+    //         state => return state,
+    //     }
+    //     for model in &asset.models {
+    //         let model = models.get(model).unwrap();
+    //         match model.get_load_state(server) {
+    //             LoadState::Loaded => {}
+    //             state => return state,
+    //         }
+    //     }
+    //     LoadState::Loaded
+    // }
+}
 
 pub struct RoomRaycastSet;
 
-impl SystemTab for RoomTab {
+impl EditorTabSystem for RoomTab {
     type LoadParam = (
         SCommands,
         SResMut<Assets<Mesh>>,
@@ -81,7 +84,7 @@ impl SystemTab for RoomTab {
         SQuery<Read<ModelLabel>>,
     );
 
-    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         let (
             _commands,
             _meshes,
@@ -94,19 +97,20 @@ impl SystemTab for RoomTab {
         ) = query;
     }
 
-    fn close(&mut self, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn close(&mut self, query: SystemParamItem<Self::LoadParam>) -> bool {
         let (_commands, _, _, _, _, _, _, _) = query;
         // for model in self.models.iter().flat_map(|l| &l.loaded) {
         //     if let Some(commands) = commands.get_entity(model.entity) {
         //         commands.despawn_recursive();
         //     }
         // }
+        true
     }
 
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        query: SystemParamItem<'_, '_, Self::UiParam>,
+        query: SystemParamItem<Self::UiParam>,
         state: &mut TabState,
     ) {
         let scale = ui.ctx().pixels_per_point();
@@ -313,11 +317,15 @@ impl SystemTab for RoomTab {
         state.render_layer += 1;
     }
 
-    fn title(&mut self) -> egui::WidgetText {
+    fn title(&self) -> egui::WidgetText {
         format!("{} {} {}", icon::SCENE_DATA, self.asset_ref.kind, self.asset_ref.id).into()
     }
 
     fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
+
+    fn clear_background(&self) -> bool { false }
+
+    fn asset(&self) -> Option<AssetRef> { Some(self.asset_ref) }
 }
 
 fn property_ui(ui: &mut egui::Ui, property: &ConstructedPropertyValue) {

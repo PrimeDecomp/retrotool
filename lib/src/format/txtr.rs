@@ -50,7 +50,7 @@ pub enum ETextureType {
 }
 
 impl Display for ETextureType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.write_str(match self {
             ETextureType::D1 => "1D",
             ETextureType::D2 => "2D",
@@ -68,7 +68,7 @@ impl Display for ETextureType {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ETextureWrap {
     ClampToEdge = 0,
     Repeat = 1,
@@ -81,7 +81,7 @@ pub enum ETextureWrap {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ETextureFilter {
     Nearest = 0,
     Linear = 1,
@@ -90,7 +90,7 @@ pub enum ETextureFilter {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ETextureMipFilter {
     Nearest = 0,
     Linear = 1,
@@ -99,7 +99,7 @@ pub enum ETextureMipFilter {
 #[binrw]
 #[repr(u8)]
 #[brw(repr(u8))]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ETextureAnisotropicRatio {
     None = u8::MAX,
     Ratio1 = 0,
@@ -127,7 +127,7 @@ pub struct STextureHeader {
 }
 
 #[binrw]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct STextureSamplerData {
     pub unk: u32,
     pub filter: ETextureFilter,
@@ -268,7 +268,7 @@ pub enum ETextureFormat {
 }
 
 impl Display for ETextureFormat {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.write_str(match self {
             ETextureFormat::R8Unorm => "R8 UNORM",
             ETextureFormat::R8Snorm => "R8 SNORM",

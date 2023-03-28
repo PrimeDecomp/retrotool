@@ -267,11 +267,11 @@ impl Default for GridSettings {
 
 // noinspection RsSortImplTraitMembers
 impl ExtractComponent for GridSettings {
-    type Filter = ();
+    type Filter = With<Camera>;
     type Out = Self;
-    type Query = (Read<Self>, Read<Camera>);
+    type Query = Read<Self>;
 
-    fn extract_component((settings, _camera): QueryItem<'_, Self::Query>) -> Option<Self::Out> {
+    fn extract_component(settings: QueryItem<Self::Query>) -> Option<Self::Out> {
         Some(settings.clone())
     }
 }

@@ -15,7 +15,7 @@ use strum::{EnumMessage, IntoEnumIterator};
 
 use crate::{
     icon,
-    tabs::{SystemTab, TabState},
+    tabs::{EditorTabSystem, TabState},
 };
 
 pub struct TemplatesTab {
@@ -24,25 +24,25 @@ pub struct TemplatesTab {
 }
 
 impl TemplatesTab {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Box<Self> {
+        Box::new(Self {
             current: load_type_template(include_str!(
                 "../../../lib/templates/mp1r/objects/Render.json"
             ))
             .unwrap(),
             editing_key: None,
-        }
+        })
     }
 }
 
-impl SystemTab for TemplatesTab {
+impl EditorTabSystem for TemplatesTab {
     type LoadParam = ();
     type UiParam = ();
 
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        _query: SystemParamItem<'_, '_, Self::UiParam>,
+        _query: SystemParamItem<Self::UiParam>,
         _state: &mut TabState,
     ) {
         egui::TextEdit::singleline(&mut self.current.name).hint_text("Name").ui(ui);
@@ -173,7 +173,7 @@ impl SystemTab for TemplatesTab {
         }
     }
 
-    fn title(&mut self) -> egui::WidgetText { format!("{} Templates", icon::EDITMODE_HLT).into() }
+    fn title(&self) -> egui::WidgetText { format!("{} Templates", icon::EDITMODE_HLT).into() }
 
     fn id(&self) -> String { "Templates".into() }
 }

@@ -1,6 +1,5 @@
 use std::{
     fmt::{Debug, Display, Formatter},
-    fs,
     io::{Cursor, Read, Seek},
 };
 
@@ -13,7 +12,6 @@ use crate::{
         rfrm::FormDescriptor, slice_chunks, CColor4f, CObjectId, CStringFixed, CVector3f,
         CVector4f, FourCC, TaggedVec,
     },
-    util::templates::{TemplateRoot, TypeTemplate},
 };
 
 // Room
@@ -225,7 +223,7 @@ pub struct GameObjectComponent {
 }
 
 impl Display for ComponentType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             ComponentType::Known(t) => write!(f, "{:?}", t),
             ComponentType::Unknown(t) => write!(f, "{:#X}", t),
@@ -357,27 +355,6 @@ impl RoomData {
                 Ok(())
             },
         )?;
-
-        let root: TemplateRoot =
-            serde_json::from_str(include_str!("../../templates/mp1r/root.json"))?;
-        // println!("{:?}", root);
-        let object: TypeTemplate =
-            serde_json::from_str(include_str!("../../templates/mp1r/objects/Render.json"))?;
-        let enum_: TypeTemplate = serde_json::from_str(include_str!(
-            "../../templates/mp1r/enums/RenderTargetScene.json"
-        ))?;
-        // println!("{:?}", object);
-        let struct_: TypeTemplate = serde_json::from_str(include_str!("/home/lstreet/Development/paktool-rs/lib/templates/mp1r/typedefs/RenderStaticModel.json")).unwrap();
-
-        println!("{}", serde_json::to_string_pretty(&root).unwrap());
-        println!("{}", serde_json::to_string_pretty(&object).unwrap());
-        println!("{}", serde_json::to_string_pretty(&enum_).unwrap());
-        println!("{}", serde_json::to_string_pretty(&struct_).unwrap());
-
-        // fs::write("/home/lstreet/Development/paktool-rs/lib/templates/mp1r/root.json", serde_json::to_string_pretty(&root).unwrap()).unwrap();
-        // fs::write("/home/lstreet/Development/paktool-rs/lib/templates/mp1r/objects/Render.json", serde_json::to_string_pretty(&object).unwrap()).unwrap();
-        // fs::write("/home/lstreet/Development/paktool-rs/lib/templates/mp1r/enums/RenderTargetScene.json", serde_json::to_string_pretty(&enum_).unwrap()).unwrap();
-        fs::write("/home/lstreet/Development/paktool-rs/lib/templates/mp1r/typedefs/RenderStaticModel.json", serde_json::to_string_pretty(&struct_).unwrap()).unwrap();
 
         let mut constructed_properties = Vec::with_capacity(component_properties.len());
         for props in &component_properties {

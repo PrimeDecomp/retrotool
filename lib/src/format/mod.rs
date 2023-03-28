@@ -50,7 +50,7 @@ impl FourCC {
 }
 
 impl Display for FourCC {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         for c in self.0 {
             f.write_char(c as char)?;
         }
@@ -59,7 +59,7 @@ impl Display for FourCC {
 }
 
 impl Debug for FourCC {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.write_char('"')?;
         for c in self.0 {
             f.write_char(c as char)?;
@@ -530,9 +530,9 @@ impl From<CObjectId> for Uuid {
 }
 
 impl Display for CObjectId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
 }
 
 impl Debug for CObjectId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "{:?}", self.0) }
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result { write!(f, "{:?}", self.0) }
 }

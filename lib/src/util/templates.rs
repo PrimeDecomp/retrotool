@@ -76,11 +76,11 @@ impl IntoRepr for TypeTemplateTypeDiscriminants {
 pub struct HexU32(pub u32);
 
 impl fmt::Display for HexU32 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:#010X}", self.0) }
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{:#010X}", self.0) }
 }
 
 impl fmt::Debug for HexU32 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:#010X}", self.0) }
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{:#010X}", self.0) }
 }
 
 impl ser::Serialize for HexU32 {

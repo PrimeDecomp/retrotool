@@ -3,11 +3,11 @@ use bevy::{
     ecs::system::{lifetimeless::*, *},
     prelude::*,
 };
-use bevy_egui::{EguiContext, EguiUserTextures};
+use bevy_egui::EguiUserTextures;
 use egui::Widget;
 use retrolib::format::txtr::ETextureType;
 
-use crate::{icon, loaders::texture::TextureAsset, tabs::SystemTab, AssetRef, TabState};
+use crate::{icon, loaders::texture::TextureAsset, tabs::EditorTabSystem, AssetRef, TabState};
 
 pub struct LoadedTexture {
     pub width: u32,
@@ -15,6 +15,7 @@ pub struct LoadedTexture {
     pub texture_ids: Vec<egui::TextureId>,
 }
 
+#[derive(Default)]
 pub struct TextureTab {
     pub asset_ref: AssetRef,
     pub handle: Handle<TextureAsset>,
@@ -23,15 +24,9 @@ pub struct TextureTab {
     pub v_flip: bool,
 }
 
-impl Default for TextureTab {
-    fn default() -> Self {
-        Self {
-            asset_ref: default(),
-            handle: default(),
-            loaded_textures: default(),
-            selected_mip: 0,
-            v_flip: false,
-        }
+impl TextureTab {
+    pub fn new(asset_ref: AssetRef, handle: Handle<TextureAsset>) -> Box<Self> {
+        Box::new(Self { asset_ref, handle, ..default() })
     }
 }
 
@@ -43,22 +38,23 @@ pub struct UiTexture {
 }
 
 impl UiTexture {
+    #[allow(dead_code)]
     pub fn new(
         image: Image,
         images: &mut Assets<Image>,
-        egui_textures: &mut EguiUserTextures,
+        textures: &mut EguiUserTextures,
     ) -> Self {
         let width = image.texture_descriptor.size.width;
         let height = image.texture_descriptor.size.height;
         let handle = images.add(image);
         let weak_handle = handle.clone_weak();
-        Self { _image: handle, texture_id: egui_textures.add_image(weak_handle), width, height }
+        Self { _image: handle, texture_id: textures.add_image(weak_handle), width, height }
     }
 
     pub fn from_handle(
         handle: Handle<Image>,
         images: &mut Assets<Image>,
-        egui_textures: &mut EguiUserTextures,
+        textures: &mut EguiUserTextures,
     ) -> Option<Self> {
         let Some(image) = images.get(&handle) else { return None; };
         let width = image.texture_descriptor.size.width;
@@ -66,7 +62,7 @@ impl UiTexture {
         let weak_handle = handle.clone_weak();
         Some(Self {
             _image: handle,
-            texture_id: egui_textures.add_image(weak_handle),
+            texture_id: textures.add_image(weak_handle),
             width,
             height,
         })
@@ -89,26 +85,29 @@ impl UiTexture {
     }
 }
 
-impl SystemTab for TextureTab {
+impl EditorTabSystem for TextureTab {
     type LoadParam =
         (SRes<Assets<TextureAsset>>, SResMut<Assets<Image>>, SResMut<EguiUserTextures>);
     type UiParam = (SRes<AssetServer>, SRes<Assets<TextureAsset>>);
 
-    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         if !self.loaded_textures.is_empty() {
             return;
         }
 
-        let (textures, mut images, mut egui_textures) = query;
+        let (textures, images, mut egui_textures) = query;
         let Some(asset) = textures.get(&self.handle) else { return; };
         self.loaded_textures.reserve_exact(asset.slices.len());
         for mip in &asset.slices {
             let mut texture_ids = Vec::with_capacity(mip.len());
             for image in mip {
-                let handle = images.add(image.clone());
-                texture_ids.push(egui_textures.add_image(handle));
+                texture_ids.push(egui_textures.add_image(image.clone_weak()));
             }
-            let size = mip.first().map(|m| m.texture_descriptor.size).unwrap_or_default();
+            let size = mip
+                .first()
+                .and_then(|h| images.get(h))
+                .map(|m| m.texture_descriptor.size)
+                .unwrap_or_default();
             self.loaded_textures.push(LoadedTexture {
                 texture_ids,
                 width: size.width,
@@ -120,7 +119,7 @@ impl SystemTab for TextureTab {
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        query: SystemParamItem<'_, '_, Self::UiParam>,
+        query: SystemParamItem<Self::UiParam>,
         _state: &mut TabState,
     ) {
         let (server, textures) = query;
@@ -128,10 +127,7 @@ impl SystemTab for TextureTab {
         ui.label(format!("{} {}", self.asset_ref.kind, self.asset_ref.id));
 
         match server.get_load_state(&self.handle) {
-            LoadState::NotLoaded => {
-                return;
-            }
-            LoadState::Loading => {
+            LoadState::NotLoaded | LoadState::Loading => {
                 ui.spinner();
                 return;
             }
@@ -141,6 +137,7 @@ impl SystemTab for TextureTab {
                 return;
             }
             LoadState::Unloaded => {
+                ui.colored_label(egui::Color32::RED, "Unloaded");
                 return;
             }
         };
@@ -198,9 +195,11 @@ impl SystemTab for TextureTab {
         }
     }
 
-    fn title(&mut self) -> egui::WidgetText {
+    fn title(&self) -> egui::WidgetText {
         format!("{} {} {}", icon::TEXTURE, self.asset_ref.kind, self.asset_ref.id).into()
     }
 
     fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
+
+    fn asset(&self) -> Option<AssetRef> { Some(self.asset_ref) }
 }

@@ -8,28 +8,19 @@ pub mod templates;
 pub mod texture;
 
 use bevy::{ecs::system::*, prelude::*, render::camera::*};
-use bevy_egui::EguiContext;
 use egui::Widget;
 use egui_dock::{NodeIndex, Style, TabIndex};
 
 use crate::{icon, AssetRef};
 
-pub enum TabType {
-    Project(Box<project::ProjectTab>),
-    Texture(Box<texture::TextureTab>),
-    Model(Box<model::ModelTab>),
-    ModCon(Box<modcon::ModConTab>),
-    LightProbe(Box<lightprobe::LightProbeTab>),
-    Room(Box<room::RoomTab>),
-    Templates(Box<templates::TemplatesTab>),
-    Splash(Box<splash::SplashTab>),
-}
+pub type TabType = Box<dyn EditorTab>;
 
 pub struct OpenTab {
     pub tab: TabType,
     pub node: Option<NodeIndex>,
 }
 
+#[derive(Default)]
 pub struct TabState {
     pub open_assets: Vec<AssetRef>,
     pub open_tab: Option<OpenTab>,
@@ -43,49 +34,80 @@ impl TabState {
     fn open_tab(&mut self, tab: TabType) { self.open_tab = Some(OpenTab { tab, node: None }); }
 }
 
-pub trait SystemTab {
-    type LoadParam: SystemParam;
-    type UiParam: SystemParam;
+pub trait EditorTab: Send + Sync {
+    fn new() -> Box<Self>
+    where Self: Default {
+        default()
+    }
 
-    fn load(&mut self, _ctx: &mut EguiContext, _query: SystemParamItem<'_, '_, Self::LoadParam>) {}
+    fn load(&mut self, world: &mut World);
 
-    fn close(&mut self, _query: SystemParamItem<'_, '_, Self::LoadParam>) {} // , _ctx: &mut EguiContext
+    fn ui(&mut self, world: &mut World, ui: &mut egui::Ui, tab_state: &mut TabState);
+
+    fn close(&mut self, world: &mut World) -> bool;
+
+    fn title(&self) -> egui::WidgetText;
+
+    fn id(&self) -> String;
+
+    fn clear_background(&self) -> bool { true }
+
+    fn asset(&self) -> Option<AssetRef> { None }
+}
+
+pub trait EditorTabSystem: Send + Sync {
+    type LoadParam: SystemParam + 'static;
+    type UiParam: SystemParam + 'static;
+
+    fn load(&mut self, _query: SystemParamItem<Self::LoadParam>) {}
+
+    fn close(&mut self, _query: SystemParamItem<Self::LoadParam>) -> bool { true }
 
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        query: SystemParamItem<'_, '_, Self::UiParam>,
+        query: SystemParamItem<Self::UiParam>,
         state: &mut TabState,
     );
 
-    fn title(&mut self) -> egui::WidgetText;
+    fn title(&self) -> egui::WidgetText;
 
     fn id(&self) -> String;
+
+    fn clear_background(&self) -> bool { true }
+
+    fn asset(&self) -> Option<AssetRef> { None }
 }
 
-pub fn load_tab<T: SystemTab + 'static>(world: &mut World, ctx: &mut EguiContext, tab: &mut T) {
-    let mut state: SystemState<T::LoadParam> = SystemState::new(world);
-    tab.load(ctx, state.get_mut(world));
-    state.apply(world);
-}
+impl<T: EditorTabSystem> EditorTab for T {
+    fn load(&mut self, world: &mut World) {
+        let mut state: SystemState<T::LoadParam> = SystemState::new(world);
+        EditorTabSystem::load(self, state.get_mut(world));
+        state.apply(world);
+    }
 
-fn render_tab<T: SystemTab + 'static>(
-    world: &mut World,
-    ui: &mut egui::Ui,
-    tab: &mut T,
-    tab_state: &mut TabState,
-) {
-    let mut state: SystemState<T::UiParam> = SystemState::new(world);
-    ui.push_id(tab.id(), |ui| {
-        tab.ui(ui, state.get_mut(world), tab_state);
-    });
-    state.apply(world);
-}
+    fn ui(&mut self, world: &mut World, ui: &mut egui::Ui, tab_state: &mut TabState) {
+        let mut state: SystemState<T::UiParam> = SystemState::new(world);
+        ui.push_id(self.id(), |ui| {
+            EditorTabSystem::ui(self, ui, state.get_mut(world), tab_state);
+        });
+        state.apply(world);
+    }
 
-fn close_tab<T: SystemTab + 'static>(world: &mut World, tab: &mut T) {
-    let mut state: SystemState<T::LoadParam> = SystemState::new(world);
-    tab.close(state.get_mut(world));
-    state.apply(world);
+    fn close(&mut self, world: &mut World) -> bool {
+        let mut state: SystemState<T::LoadParam> = SystemState::new(world);
+        let result = EditorTabSystem::close(self, state.get_mut(world));
+        state.apply(world);
+        result
+    }
+
+    fn title(&self) -> egui::WidgetText { EditorTabSystem::title(self) }
+
+    fn id(&self) -> String { EditorTabSystem::id(self) }
+
+    fn clear_background(&self) -> bool { EditorTabSystem::clear_background(self) }
+
+    fn asset(&self) -> Option<AssetRef> { EditorTabSystem::asset(self) }
 }
 
 pub struct TabViewer<'a> {
@@ -97,16 +119,7 @@ impl egui_dock::TabViewer for TabViewer<'_> {
     type Tab = TabType;
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        match tab {
-            TabType::Project(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::Texture(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::Model(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::ModCon(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::LightProbe(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::Room(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::Templates(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-            TabType::Splash(tab) => render_tab(self.world, ui, tab.as_mut(), &mut self.state),
-        }
+        tab.ui(self.world, ui, &mut self.state);
     }
 
     fn context_menu(
@@ -126,49 +139,9 @@ impl egui_dock::TabViewer for TabViewer<'_> {
         };
     }
 
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match tab {
-            TabType::Project(tab) => tab.title(),
-            TabType::Texture(tab) => tab.title(),
-            TabType::Model(tab) => tab.title(),
-            TabType::ModCon(tab) => tab.title(),
-            TabType::LightProbe(tab) => tab.title(),
-            TabType::Room(tab) => tab.title(),
-            TabType::Templates(tab) => tab.title(),
-            TabType::Splash(tab) => tab.title(),
-        }
-    }
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText { tab.title() }
 
-    fn on_close(&mut self, tab: &mut Self::Tab) -> bool {
-        match tab {
-            TabType::Project(_) => true,
-            TabType::Texture(tab) => {
-                close_tab(self.world, tab.as_mut());
-                true
-            }
-            TabType::Model(tab) => {
-                close_tab(self.world, tab.as_mut());
-                true
-            }
-            TabType::ModCon(tab) => {
-                close_tab(self.world, tab.as_mut());
-                true
-            }
-            TabType::LightProbe(tab) => {
-                close_tab(self.world, tab.as_mut());
-                true
-            }
-            TabType::Room(tab) => {
-                close_tab(self.world, tab.as_mut());
-                true
-            }
-            TabType::Templates(_) => true,
-            TabType::Splash(tab) => {
-                close_tab(self.world, tab.as_mut());
-                true
-            }
-        }
-    }
+    fn on_close(&mut self, tab: &mut Self::Tab) -> bool { tab.close(self.world) }
 
     fn add_popup(&mut self, ui: &mut egui::Ui, node: NodeIndex) {
         ui.set_min_width(100.0);
@@ -176,13 +149,11 @@ impl egui_dock::TabViewer for TabViewer<'_> {
 
         if ui.button(format!("{} Browser", icon::FILEBROWSER)).clicked() {
             self.state.open_tab =
-                Some(OpenTab { tab: TabType::Project(Box::default()), node: Some(node) });
+                Some(OpenTab { tab: project::ProjectTab::new(), node: Some(node) });
         }
         if ui.button(format!("{} Templates", icon::EDITMODE_HLT)).clicked() {
-            self.state.open_tab = Some(OpenTab {
-                tab: TabType::Templates(Box::new(templates::TemplatesTab::new())),
-                node: Some(node),
-            });
+            self.state.open_tab =
+                Some(OpenTab { tab: templates::TemplatesTab::new(), node: Some(node) });
         }
     }
 
@@ -194,9 +165,7 @@ impl egui_dock::TabViewer for TabViewer<'_> {
         }
     }
 
-    fn clear_background(&self, tab: &Self::Tab) -> bool {
-        !matches!(tab, TabType::Model(_) | TabType::ModCon(_) | TabType::Room(_))
-    }
+    fn clear_background(&self, tab: &Self::Tab) -> bool { tab.clear_background() }
 }
 
 pub fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) {

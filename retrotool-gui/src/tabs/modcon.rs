@@ -6,7 +6,6 @@ use bevy::{
     prelude::*,
     render::{camera::Viewport, primitives::Aabb, view::RenderLayers},
 };
-use bevy_egui::EguiContext;
 use bevy_mod_raycast::{Intersection, RaycastMesh, RaycastSource};
 use egui::{Sense, Widget};
 use retrolib::format::SumBy;
@@ -24,7 +23,7 @@ use crate::{
         camera::ModelCamera, convert_transform, grid::GridSettings, model::load_model,
         TemporaryLabel,
     },
-    tabs::{model::ModelTab, SystemTab, TabState, TabType},
+    tabs::{model::ModelTab, EditorTabSystem, TabState},
     AssetRef,
 };
 
@@ -69,6 +68,10 @@ impl Default for ModConTab {
 }
 
 impl ModConTab {
+    pub fn new(asset_ref: AssetRef, handle: Handle<ModConAsset>) -> Box<Self> {
+        Box::new(Self { asset_ref, handle, ..default() })
+    }
+
     fn get_load_state(
         &self,
         server: &AssetServer,
@@ -107,7 +110,7 @@ pub struct ModelLabel {
     pub tab_id: Uuid,
 }
 
-impl SystemTab for ModConTab {
+impl EditorTabSystem for ModConTab {
     type LoadParam = (
         SCommands,
         SResMut<Assets<Mesh>>,
@@ -127,13 +130,13 @@ impl SystemTab for ModConTab {
         SQuery<(Read<ModelLabel>, Read<Children>)>,
     );
 
-    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         let (
             mut commands,
             mut meshes,
             mut materials,
             mut models,
-            texture_assets,
+            mut texture_assets,
             mut images,
             server,
             mod_con_assets,
@@ -183,7 +186,7 @@ impl SystemTab for ModConTab {
                 _ => continue,
             }
 
-            asset.build_texture_images(&texture_assets, &mut images);
+            asset.build_texture_images(&mut texture_assets, &mut images);
             let result = load_model(asset, &mut meshes);
             let built = match result {
                 Ok(value) => value,
@@ -257,19 +260,20 @@ impl SystemTab for ModConTab {
         }
     }
 
-    fn close(&mut self, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn close(&mut self, query: SystemParamItem<Self::LoadParam>) -> bool {
         let (mut commands, _, _, _, _, _, _, _) = query;
         for model in self.models.iter().flat_map(|l| &l.loaded) {
             if let Some(commands) = commands.get_entity(model.entity) {
                 commands.despawn_recursive();
             }
         }
+        true
     }
 
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        query: SystemParamItem<'_, '_, Self::UiParam>,
+        query: SystemParamItem<Self::UiParam>,
         state: &mut TabState,
     ) {
         let scale = ui.ctx().pixels_per_point();
@@ -286,7 +290,7 @@ impl SystemTab for ModConTab {
         self.camera.update(&rect, &response, ui.input(|i| i.scroll_delta));
 
         let (mut commands, server, models, mod_con_assets, intersection_query, model_query) = query;
-        if !self.models.iter().all(|m| !m.loaded.is_empty()) {
+        if self.models.is_empty() || !self.models.iter().all(|m| !m.loaded.is_empty()) {
             ui.centered_and_justified(|ui| {
                 match self.get_load_state(&server, &mod_con_assets, &models) {
                     LoadState::Failed => egui::Label::new(
@@ -321,11 +325,7 @@ impl SystemTab for ModConTab {
             response = response.context_menu(|ui| {
                 if ui.button("Open in new tab").clicked() {
                     let handle = server.load(format!("{}.{}", selected.id, selected.kind));
-                    state.open_tab(TabType::Model(Box::new(ModelTab {
-                        asset_ref: *selected,
-                        handle,
-                        ..default()
-                    })));
+                    state.open_tab(ModelTab::new(*selected, handle));
                     ui.close_menu();
                 }
                 if ui.button("Copy GUID").clicked() {
@@ -424,9 +424,13 @@ impl SystemTab for ModConTab {
         state.render_layer += 1;
     }
 
-    fn title(&mut self) -> egui::WidgetText {
+    fn title(&self) -> egui::WidgetText {
         format!("{} {} {}", icon::SCENE_DATA, self.asset_ref.kind, self.asset_ref.id).into()
     }
 
     fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
+
+    fn clear_background(&self) -> bool { false }
+
+    fn asset(&self) -> Option<AssetRef> { Some(self.asset_ref) }
 }

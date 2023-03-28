@@ -1,3 +1,5 @@
+use std::num::NonZeroU8;
+
 use anyhow::{anyhow, Error, Result};
 use bevy::{
     asset::{AssetLoader, BoxedFuture, LoadContext, LoadedAsset},
@@ -7,7 +9,7 @@ use bevy::{
             Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
         },
         renderer::RenderDevice,
-        texture::CompressedImageFormats,
+        texture::{CompressedImageFormats, ImageSampler},
     },
 };
 use binrw::Endian;
@@ -17,7 +19,8 @@ use retrolib::format::{
         decompress_image, slice_texture, ETextureFormat, ETextureType, TextureData, K_FORM_TXTR,
     },
 };
-use uuid::Uuid;
+use wgpu::SamplerDescriptor;
+use wgpu_types::{AddressMode, FilterMode};
 
 use crate::AssetRef;
 
@@ -26,8 +29,8 @@ use crate::AssetRef;
 pub struct TextureAsset {
     pub asset_ref: AssetRef,
     pub inner: TextureData,
-    pub texture: Image,
-    pub slices: Vec<Vec<Image>>, // [mip][layer]
+    pub texture: Handle<Image>,
+    pub slices: Vec<Vec<Handle<Image>>>, // [mip][layer]
 }
 
 pub struct TextureAssetLoader {
@@ -56,8 +59,26 @@ impl AssetLoader for TextureAssetLoader {
             let data = TextureData::slice(bytes, meta, Endian::Little)?;
             info!("Loading texture {} {:?}", id, data.head);
 
-            let asset = load_texture_asset(id, data, &self.supported_formats)?;
-            load_context.set_default_asset(LoadedAsset::new(asset));
+            let result = load_texture_asset(data, &self.supported_formats)?;
+            let image_handle =
+                load_context.set_labeled_asset("image", LoadedAsset::new(result.texture));
+            let mut slice_handles = Vec::with_capacity(result.slices.len());
+            for (mip, images) in result.slices.into_iter().enumerate() {
+                let mut handles = Vec::with_capacity(images.len());
+                for (layer, image) in images.into_iter().enumerate() {
+                    handles.push(load_context.set_labeled_asset(
+                        &format!("mip_{}_layer_{}", mip, layer),
+                        LoadedAsset::new(image),
+                    ));
+                }
+                slice_handles.push(handles);
+            }
+            load_context.set_default_asset(LoadedAsset::new(TextureAsset {
+                asset_ref: AssetRef { id, kind: K_FORM_TXTR },
+                inner: result.inner,
+                texture: image_handle,
+                slices: slice_handles,
+            }));
             Ok(())
         })
     }
@@ -65,11 +86,16 @@ impl AssetLoader for TextureAssetLoader {
     fn extensions(&self) -> &[&str] { &["txtr"] }
 }
 
+pub struct LoadTextureResult {
+    pub inner: TextureData,
+    pub texture: Image,
+    pub slices: Vec<Vec<Image>>, // [mip][layer]
+}
+
 pub fn load_texture_asset(
-    id: Uuid,
     data: TextureData,
     supported_formats: &CompressedImageFormats,
-) -> Result<TextureAsset> {
+) -> Result<LoadTextureResult> {
     let is_srgb = data.head.format.is_srgb();
     let slices = slice_texture(&data)?;
     let (bw, bh, _) = data.head.format.block_size();
@@ -110,12 +136,7 @@ pub fn load_texture_asset(
         )
     };
     let texture = texture_to_image(&data, format, image_data)?;
-    Ok(TextureAsset {
-        asset_ref: AssetRef { id, kind: K_FORM_TXTR },
-        inner: data,
-        texture,
-        slices: images,
-    })
+    Ok(LoadTextureResult { inner: data, texture, slices: images })
 }
 
 /// Create an [Image] from a 2D texture slice.
@@ -145,6 +166,7 @@ fn texture_slice_to_image(
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         },
+        sampler_descriptor: DEFAULT_SAMPLER,
         ..default()
     }
 }
@@ -155,9 +177,24 @@ fn texture_format_supported(
     supported_formats: &CompressedImageFormats,
 ) -> bool {
     supported_formats.supports(format)
-        // ASTC 3D textures are unsupported
+        // ASTC 3D textures are not supported by wgpu
         && !(kind == ETextureType::D3 && matches!(format, TextureFormat::Astc { .. }))
 }
+
+const DEFAULT_SAMPLER: ImageSampler = ImageSampler::Descriptor(SamplerDescriptor {
+    label: None,
+    address_mode_u: AddressMode::Repeat,
+    address_mode_v: AddressMode::Repeat,
+    address_mode_w: AddressMode::Repeat,
+    mag_filter: FilterMode::Linear,
+    min_filter: FilterMode::Linear,
+    mipmap_filter: FilterMode::Linear,
+    lod_min_clamp: 0.0,
+    lod_max_clamp: f32::MAX,
+    compare: None,
+    anisotropy_clamp: NonZeroU8::new(8),
+    border_color: None,
+});
 
 /// Creates an [Image] from a full texture.
 fn texture_to_image(
@@ -186,6 +223,7 @@ fn texture_to_image(
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         },
+        sampler_descriptor: DEFAULT_SAMPLER,
         ..default()
     })
 }

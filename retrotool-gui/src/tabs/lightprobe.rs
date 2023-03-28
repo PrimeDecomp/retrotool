@@ -3,13 +3,13 @@ use bevy::{
     ecs::system::{lifetimeless::*, *},
     prelude::*,
 };
-use bevy_egui::{EguiContext, EguiUserTextures};
+use bevy_egui::EguiUserTextures;
 use retrolib::format::txtr::ETextureType;
 
 use crate::{
     icon,
     loaders::lightprobe::LightProbeAsset,
-    tabs::{texture::LoadedTexture, SystemTab, TabState},
+    tabs::{texture::LoadedTexture, EditorTabSystem, TabState},
     AssetRef,
 };
 
@@ -20,17 +20,23 @@ pub struct LightProbeTab {
     pub loaded_textures: Vec<Vec<LoadedTexture>>,
 }
 
-impl SystemTab for LightProbeTab {
+impl LightProbeTab {
+    pub fn new(asset_ref: AssetRef, handle: Handle<LightProbeAsset>) -> Box<Self> {
+        Box::new(Self { asset_ref, handle, ..default() })
+    }
+}
+
+impl EditorTabSystem for LightProbeTab {
     type LoadParam =
         (SRes<Assets<LightProbeAsset>>, SResMut<Assets<Image>>, SResMut<EguiUserTextures>);
     type UiParam = (SRes<AssetServer>, SRes<Assets<LightProbeAsset>>);
 
-    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         if !self.loaded_textures.is_empty() {
             return;
         }
 
-        let (assets, mut images, mut egui_textures) = query;
+        let (assets, images, mut egui_textures) = query;
         let Some(asset) = assets.get(&self.handle) else { return; };
 
         self.loaded_textures.reserve_exact(asset.textures.len());
@@ -39,10 +45,13 @@ impl SystemTab for LightProbeTab {
             for mip in &texture.slices {
                 let mut texture_ids = Vec::with_capacity(mip.len());
                 for image in mip {
-                    let handle = images.add(image.clone());
-                    texture_ids.push(egui_textures.add_image(handle));
+                    texture_ids.push(egui_textures.add_image(image.clone_weak()));
                 }
-                let size = mip.first().map(|m| m.texture_descriptor.size).unwrap_or_default();
+                let size = mip
+                    .first()
+                    .and_then(|h| images.get(h))
+                    .map(|m| m.texture_descriptor.size)
+                    .unwrap_or_default();
                 slices.push(LoadedTexture { texture_ids, width: size.width, height: size.height });
             }
             self.loaded_textures.push(slices);
@@ -52,7 +61,7 @@ impl SystemTab for LightProbeTab {
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        query: SystemParamItem<'_, '_, Self::UiParam>,
+        query: SystemParamItem<Self::UiParam>,
         _state: &mut TabState,
     ) {
         let (server, assets) = query;
@@ -60,10 +69,7 @@ impl SystemTab for LightProbeTab {
         ui.label(format!("{} {}", self.asset_ref.kind, self.asset_ref.id));
 
         match server.get_load_state(&self.handle) {
-            LoadState::NotLoaded => {
-                return;
-            }
-            LoadState::Loading => {
+            LoadState::NotLoaded | LoadState::Loading => {
                 ui.spinner();
                 return;
             }
@@ -73,6 +79,7 @@ impl SystemTab for LightProbeTab {
                 return;
             }
             LoadState::Unloaded => {
+                ui.colored_label(egui::Color32::RED, "Unloaded");
                 return;
             }
         };
@@ -128,9 +135,11 @@ impl SystemTab for LightProbeTab {
         }
     }
 
-    fn title(&mut self) -> egui::WidgetText {
+    fn title(&self) -> egui::WidgetText {
         format!("{} {} {}", icon::LIGHTPROBE_CUBEMAP, self.asset_ref.kind, self.asset_ref.id).into()
     }
 
     fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
+
+    fn asset(&self) -> Option<AssetRef> { Some(self.asset_ref) }
 }

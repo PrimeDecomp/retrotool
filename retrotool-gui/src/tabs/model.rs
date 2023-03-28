@@ -7,8 +7,8 @@ use bevy::{
     prelude::*,
     render::{camera::Viewport, view::RenderLayers},
 };
-use bevy_egui::{EguiContext, EguiUserTextures};
-use egui::{Color32, Sense, Widget};
+use bevy_egui::EguiUserTextures;
+use egui::Widget;
 use retrolib::format::{
     cmdl::{CMaterialCache, CMaterialDataInner, CMaterialTextureTokenData},
     txtr::K_FORM_TXTR,
@@ -32,7 +32,7 @@ use crate::{
     tabs::{
         property_with_value,
         texture::{TextureTab, UiTexture},
-        SystemTab, TabType,
+        EditorTabSystem,
     },
     AssetRef, TabState,
 };
@@ -65,6 +65,10 @@ pub struct ModelTab {
 }
 
 impl ModelTab {
+    pub fn new(asset_ref: AssetRef, handle: Handle<ModelAsset>) -> Box<Self> {
+        Box::new(Self { asset_ref, handle, ..default() })
+    }
+
     fn get_load_state(&self, server: &AssetServer, models: &Assets<ModelAsset>) -> LoadState {
         match server.get_load_state(&self.handle) {
             LoadState::Loaded => {}
@@ -79,7 +83,7 @@ impl ModelTab {
     }
 }
 
-impl SystemTab for ModelTab {
+impl EditorTabSystem for ModelTab {
     type LoadParam = (
         SCommands,
         SResMut<Assets<Mesh>>,
@@ -92,13 +96,13 @@ impl SystemTab for ModelTab {
     );
     type UiParam = (SCommands, SRes<AssetServer>, SRes<Assets<ModelAsset>>);
 
-    fn load(&mut self, _ctx: &mut EguiContext, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         let (
             mut commands,
             mut meshes,
             mut materials,
             mut models,
-            texture_assets,
+            mut texture_assets,
             mut images,
             server,
             mut egui_textures,
@@ -122,7 +126,7 @@ impl SystemTab for ModelTab {
             _ => return,
         }
 
-        asset.build_texture_images(&texture_assets, &mut images);
+        asset.build_texture_images(&mut texture_assets, &mut images);
         let result = load_model(asset, &mut meshes);
         let built = match result {
             Ok(value) => value,
@@ -152,6 +156,7 @@ impl SystemTab for ModelTab {
                     mesh: mesh.mesh,
                     material,
                     // transform: Transform::from_translation((-built.aabb.center).into()),
+                    visibility: Visibility::Hidden,
                     ..default()
                 })
                 .id();
@@ -171,16 +176,16 @@ impl SystemTab for ModelTab {
         // Build egui textures
         for (texture_id, texture_handle) in &asset.textures {
             let texture = texture_assets.get(texture_handle).unwrap();
-            let ui_texture = UiTexture::new(
+            let ui_texture = UiTexture::from_handle(
                 texture.slices[0][0].clone(),
                 images.as_mut(),
                 egui_textures.as_mut(),
-            );
+            ).unwrap();
             self.egui_textures.insert(*texture_id, ui_texture);
         }
     }
 
-    fn close(&mut self, query: SystemParamItem<'_, '_, Self::LoadParam>) {
+    fn close(&mut self, query: SystemParamItem<Self::LoadParam>) -> bool {
         let (mut commands, _, _, _, _, _, _, _) = query;
         if let Some(loaded) = &self.loaded {
             for mesh in &loaded.meshes {
@@ -189,12 +194,13 @@ impl SystemTab for ModelTab {
                 }
             }
         }
+        true
     }
 
     fn ui(
         &mut self,
         ui: &mut egui::Ui,
-        query: SystemParamItem<'_, '_, Self::UiParam>,
+        query: SystemParamItem<Self::UiParam>,
         state: &mut TabState,
     ) {
         let scale = ui.ctx().pixels_per_point();
@@ -207,7 +213,7 @@ impl SystemTab for ModelTab {
             depth: 0.0..1.0,
         };
         let response =
-            ui.interact(rect, ui.make_persistent_id("background"), Sense::click_and_drag());
+            ui.interact(rect, ui.make_persistent_id("background"), egui::Sense::click_and_drag());
         self.camera.update(&rect, &response, ui.input(|i| i.scroll_delta));
 
         let (mut commands, server, models) = query;
@@ -275,10 +281,16 @@ impl SystemTab for ModelTab {
                                 ),
                             );
                             if !matches!(mesh.unk_c, 0 | 1) {
-                                ui.colored_label(Color32::RED, format!("(unk_c: {})", mesh.unk_c));
+                                ui.colored_label(
+                                    egui::Color32::RED,
+                                    format!("(unk_c: {})", mesh.unk_c),
+                                );
                             }
                             if mesh.unk_e != 64 {
-                                ui.colored_label(Color32::RED, format!("(unk_e: {})", mesh.unk_e));
+                                ui.colored_label(
+                                    egui::Color32::RED,
+                                    format!("(unk_e: {})", mesh.unk_e),
+                                );
                             }
                             if ui
                                 .small_button(format!("{}", icon::MATERIAL_DATA))
@@ -299,7 +311,7 @@ impl SystemTab for ModelTab {
             });
             if let Some(material_idx) = self.selected_material {
                 ui.push_id(format!("material_{}", material_idx), |ui| {
-                    egui::Frame::group(ui.style()).fill(Color32::from_black_alpha(200)).show(
+                    egui::Frame::group(ui.style()).fill(egui::Color32::from_black_alpha(200)).show(
                         ui,
                         |ui| {
                             egui::ScrollArea::vertical()
@@ -338,11 +350,15 @@ impl SystemTab for ModelTab {
         }
     }
 
-    fn title(&mut self) -> egui::WidgetText {
+    fn title(&self) -> egui::WidgetText {
         format!("{} {} {}", icon::FILE_3D, self.asset_ref.kind, self.asset_ref.id).into()
     }
 
     fn id(&self) -> String { format!("{} {}", self.asset_ref.kind, self.asset_ref.id) }
+
+    fn clear_background(&self) -> bool { false }
+
+    fn asset(&self) -> Option<AssetRef> { Some(self.asset_ref) }
 }
 
 fn texture_ui(
@@ -356,16 +372,15 @@ fn texture_ui(
     if let Some(ui_texture) = textures.get(&texture.id) {
         if ui_texture
             .image_scaled(200.0)
-            .sense(Sense::click())
+            .sense(egui::Sense::click())
             .ui(ui)
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .clicked()
         {
-            state.open_tab(TabType::Texture(Box::new(TextureTab {
-                asset_ref: AssetRef { id: texture.id, kind: K_FORM_TXTR },
-                handle: server.load(format!("{}.{}", texture.id, K_FORM_TXTR)),
-                ..default()
-            })));
+            state.open_tab(TextureTab::new(
+                AssetRef { id: texture.id, kind: K_FORM_TXTR },
+                server.load(format!("{}.{}", texture.id, K_FORM_TXTR)),
+            ));
         }
     }
     if let Some(usage) = &texture.usage {

@@ -7,10 +7,13 @@ use bevy::{
 use binrw::Endian;
 use retrolib::format::{
     foot::{locate_asset_id, locate_meta},
-    ltpb::{LightProbeBundleHeader, LightProbeData, LightProbeExtra},
+    ltpb::{LightProbeBundleHeader, LightProbeData, LightProbeExtra, K_FORM_LTPB},
 };
 
-use crate::loaders::texture::{load_texture_asset, TextureAsset};
+use crate::{
+    loaders::texture::{load_texture_asset, TextureAsset},
+    AssetRef,
+};
 
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "f5d65a8b-ffcc-47ea-8c9d-1ab30cca723c"]
@@ -47,8 +50,27 @@ impl AssetLoader for LightProbeAssetLoader {
             info!("Loading light probe {} {:?}", id, data.head);
 
             let mut textures = Vec::with_capacity(data.textures.len());
-            for texture_data in data.textures {
-                textures.push(load_texture_asset(id, texture_data, &self.supported_formats)?);
+            for (idx, texture_data) in data.textures.into_iter().enumerate() {
+                let result = load_texture_asset(texture_data, &self.supported_formats)?;
+                let image_handle = load_context
+                    .set_labeled_asset(&format!("image_{idx}"), LoadedAsset::new(result.texture));
+                let mut slice_handles = Vec::with_capacity(result.slices.len());
+                for (mip, images) in result.slices.into_iter().enumerate() {
+                    let mut handles = Vec::with_capacity(images.len());
+                    for (layer, image) in images.into_iter().enumerate() {
+                        handles.push(load_context.set_labeled_asset(
+                            &format!("image_{idx}_mip_{mip}_layer_{layer}"),
+                            LoadedAsset::new(image),
+                        ));
+                    }
+                    slice_handles.push(handles);
+                }
+                textures.push(TextureAsset {
+                    asset_ref: AssetRef { id, kind: K_FORM_LTPB },
+                    inner: result.inner,
+                    texture: image_handle,
+                    slices: slice_handles,
+                });
             }
             load_context.set_default_asset(LoadedAsset::new(LightProbeAsset {
                 head: data.head,
