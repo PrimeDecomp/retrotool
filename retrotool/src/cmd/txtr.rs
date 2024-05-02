@@ -6,11 +6,11 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use argh::FromArgs;
-use binrw::Endian;
 use retrolib::{
     format::{foot::locate_meta, txtr::TextureData},
     util::{astc::write_astc, dds::write_dds, file::map_file},
 };
+use zerocopy::LittleEndian;
 
 #[derive(FromArgs, PartialEq, Debug)]
 /// process TXTR files
@@ -47,8 +47,8 @@ pub fn run(args: Args) -> Result<()> {
 
 fn convert(args: ConvertArgs) -> Result<()> {
     let data = map_file(&args.input)?;
-    let meta = locate_meta(&data, Endian::Little)?;
-    let TextureData { head, data } = TextureData::slice(&data, meta, Endian::Little)?;
+    let meta = locate_meta::<LittleEndian>(&data)?;
+    let TextureData { head, data, .. } = TextureData::<LittleEndian>::slice(&data, meta)?;
 
     log::info!("Texture info:");
     log::info!("  Type: {}", head.kind);

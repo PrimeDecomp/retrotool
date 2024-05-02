@@ -1,0 +1,69 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "LightingMP1",
+  "type": "property_list",
+  "properties": {
+    "0xA85B573C": {
+      "type": "u8"
+    },
+    "0xAA2BDEC8": {
+      "type": "i32"
+    },
+    "0xCF2BCB3D": {
+      "type": "i32"
+    },
+    "0xD1963651": {
+      "type": "i32"
+    },
+    "0xDFCBE01C": {
+      "type": "u8"
+    },
+    "0x80337866": {
+      "type": "u8"
+    },
+    "0x86C6007A": {
+      "type": "u8"
+    },
+    "0x8CBF4CFC": {
+      "type": "f32"
+    },
+    "0x95805D91": {
+      "type": "i32"
+    },
+    "0x9C880181": {
+      "type": "i32"
+    },
+    "0x5A71A7E5": {
+      "type": "i32"
+    },
+    "0x5E4EFA3E": {
+      "type": "u8"
+    },
+    "0x5E5FBFB2": {
+      "type": "i32"
+    },
+    "0x484E3966": {
+      "type": "i32"
+    },
+    "0x02CA544B": {
+      "type": "u8"
+    },
+    "0xE2BCDF48": {
+      "type": "color"
+    },
+    "0x06FB0A62": {
+      "type": "i32"
+    },
+    "0x2EB26420": {
+      "type": "u8"
+    },
+    "0x37ACCE32": {
+      "type": "struct",
+      "struct": "ColorMP1"
+    },
+    "0x046B4570": {
+      "type": "struct",
+      "struct": "VectorMP1"
+    }
+  }
+}

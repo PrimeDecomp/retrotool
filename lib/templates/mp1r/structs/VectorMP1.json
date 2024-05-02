@@ -1,0 +1,19 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "VectorMP1",
+  "type": "property_list",
+  "properties": {
+    "0x2649e551": {
+      "name": "x",
+      "type": "f32"
+    },
+    "0xd2bb5bc6": {
+      "name": "y",
+      "type": "f32"
+    },
+    "0x7f9499b2": {
+      "name": "z",
+      "type": "f32"
+    }
+  }
+}

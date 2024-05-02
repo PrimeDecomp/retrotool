@@ -3,13 +3,13 @@ use bevy::{
     asset::{AssetLoader, BoxedFuture, LoadContext, LoadedAsset},
     prelude::*,
 };
-use binrw::Endian;
 use retrolib::format::room::RoomData;
+use zerocopy::LittleEndian;
 
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "12ae034e-f1f7-404a-8b7e-d04d9f8f34a7"]
 pub struct RoomAsset {
-    pub inner: RoomData,
+    pub inner: RoomData<LittleEndian>,
 }
 
 pub struct RoomAssetLoader;
@@ -25,8 +25,8 @@ impl AssetLoader for RoomAssetLoader {
         load_context: &'a mut LoadContext,
     ) -> BoxedFuture<'a, anyhow::Result<(), Error>> {
         Box::pin(async move {
-            let room = RoomData::slice(bytes, Endian::Little)?;
-            println!("Loaded ROOM: {:?}", room);
+            let room = RoomData::<LittleEndian>::slice(bytes)?;
+            // println!("Loaded ROOM: {:?}", room);
             let dependencies = vec![];
             load_context.set_default_asset(
                 LoadedAsset::new(RoomAsset { inner: room }).with_dependencies(dependencies),

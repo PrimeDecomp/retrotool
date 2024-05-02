@@ -180,7 +180,8 @@ impl EditorTabSystem for ModelTab {
                 texture.slices[0][0].clone(),
                 images.as_mut(),
                 egui_textures.as_mut(),
-            ).unwrap();
+            )
+            .unwrap();
             self.egui_textures.insert(*texture_id, ui_texture);
         }
     }

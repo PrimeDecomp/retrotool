@@ -1,0 +1,17 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "AnimationParametersMP1",
+  "type": "property_list",
+  "properties": {
+    "0xa589d885": {
+      "name": "CharInfo",
+      "type": "id"
+    },
+    "0xD6F0C0F0": {
+      "type": "pooled_string"
+    },
+    "0x87C03A01": {
+      "type": "pooled_string"
+    }
+  }
+}

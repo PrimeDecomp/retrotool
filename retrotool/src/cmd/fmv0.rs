@@ -7,11 +7,11 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use argh::FromArgs;
-use binrw::Endian;
 use retrolib::{
     format::{foot::K_FORM_FOOT, rfrm::FormDescriptor, FourCC},
     util::file::map_file,
 };
+use zerocopy::LittleEndian;
 
 // Video
 pub const K_FORM_FMV0: FourCC = FourCC(*b"FMV0");
@@ -64,7 +64,7 @@ pub fn run(args: Args) -> Result<()> {
 
 fn extract(args: ExtractArgs) -> Result<()> {
     let data = map_file(&args.input)?;
-    let (fmv0_desc, chunk_data, _) = FormDescriptor::slice(&data, Endian::Little)?;
+    let (fmv0_desc, chunk_data, _) = FormDescriptor::<LittleEndian>::slice(&data)?;
     ensure!(fmv0_desc.id == K_FORM_FMV0);
     fs::write(&args.output, chunk_data)
         .with_context(|| format!("Failed to write output file '{}'", args.output.display()))?;
@@ -72,13 +72,13 @@ fn extract(args: ExtractArgs) -> Result<()> {
 }
 
 fn replace(args: ReplaceArgs) -> Result<()> {
-    let (mut fmv0_desc, mut footer_desc, footer_data) = {
+    let (fmv0_desc, footer_desc, footer_data) = {
         let fmv0_data = map_file(&args.fmv0)?;
-        let (fmv0_desc, _, remain) = FormDescriptor::slice(&fmv0_data, Endian::Little)?;
+        let (fmv0_desc, _, remain) = FormDescriptor::<LittleEndian>::slice(&fmv0_data)?;
         ensure!(fmv0_desc.id == K_FORM_FMV0);
-        let (footer_desc, footer_data, _) = FormDescriptor::slice(remain, Endian::Little)?;
+        let (footer_desc, footer_data, _) = FormDescriptor::<LittleEndian>::slice(remain)?;
         ensure!(footer_desc.id == K_FORM_FOOT);
-        (fmv0_desc, footer_desc, footer_data.to_vec())
+        (fmv0_desc.clone(), footer_desc.clone(), footer_data.to_vec())
     };
 
     let data = map_file(&args.video)?;
@@ -86,11 +86,11 @@ fn replace(args: ReplaceArgs) -> Result<()> {
         File::create(&args.fmv0)
             .with_context(|| format!("Failed to create output file '{}'", args.fmv0.display()))?,
     );
-    fmv0_desc.write(&mut file, Endian::Little, |w| {
+    fmv0_desc.write(&mut file, |w| {
         w.write_all(&data)?;
         Ok(())
     })?;
-    footer_desc.write(&mut file, Endian::Little, |w| {
+    footer_desc.write(&mut file, |w| {
         w.write_all(&footer_data)?;
         Ok(())
     })?;

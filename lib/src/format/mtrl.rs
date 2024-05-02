@@ -1,8 +1,12 @@
-use std::io::{Cursor, Read};
+use std::{
+    io::{Cursor, Read},
+    marker::PhantomData,
+};
 
 use anyhow::{ensure, Result};
 use binrw::{binrw, BinReaderExt, Endian};
 use flate2::bufread::ZlibDecoder;
+use zerocopy::ByteOrder;
 
 use crate::format::{rfrm::FormDescriptor, FourCC};
 
@@ -20,24 +24,25 @@ struct SMaterialMetaData {
 }
 
 #[derive(Debug, Clone)]
-pub struct MaterialData {
+pub struct MaterialData<O: ByteOrder> {
     pub decompressed: Vec<u8>,
+    _marker: PhantomData<O>,
 }
 
-impl MaterialData {
-    pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<MaterialData> {
-        let (mtrl_desc, _, _) = FormDescriptor::slice(data, e)?;
+impl<O: ByteOrder> MaterialData<O> {
+    pub fn slice(data: &[u8], meta: &[u8]) -> Result<Self> {
+        let (mtrl_desc, _, _) = FormDescriptor::<O>::slice(data)?;
         ensure!(mtrl_desc.id == K_FORM_MTRL);
-        ensure!(mtrl_desc.reader_version == 168);
-        ensure!(mtrl_desc.writer_version == 168);
+        ensure!(mtrl_desc.reader_version.get() == 168);
+        ensure!(mtrl_desc.writer_version.get() == 168);
 
-        let meta: SMaterialMetaData = Cursor::new(meta).read_type(e)?;
+        let meta: SMaterialMetaData = Cursor::new(meta).read_type(Endian::Little)?;
         let mut reader = ZlibDecoder::new(
             &data[meta.file_offset as usize..(meta.file_offset + meta.compressed_size) as usize],
         );
         let mut decompressed = vec![0u8; meta.decompressed_size as usize];
         reader.read_exact(&mut decompressed)?;
 
-        Ok(MaterialData { decompressed })
+        Ok(Self { decompressed, _marker: PhantomData })
     }
 }

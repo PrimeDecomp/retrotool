@@ -1,0 +1,16 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "WaterSortType",
+  "type": "enum",
+  "values": [
+    {
+      "value": "0x1D5F7C20"
+    },
+    {
+      "value": "0x266701CD"
+    },
+    {
+      "value": "0xCFFA68C3"
+    }
+  ]
+}

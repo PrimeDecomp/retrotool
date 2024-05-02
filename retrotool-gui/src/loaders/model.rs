@@ -4,10 +4,9 @@ use anyhow::{Error, Result};
 use bevy::{
     asset::{AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadState, LoadedAsset},
     prelude::*,
-    render::{render_resource::SamplerDescriptor},
+    render::render_resource::SamplerDescriptor,
     utils::{hashbrown::hash_map::Entry, HashMap},
 };
-use binrw::Endian;
 use retrolib::format::{
     cmdl::{
         CMaterialCache, CMaterialDataInner, EMaterialDataId, ModelData, STextureUsageInfo,
@@ -21,6 +20,7 @@ use retrolib::format::{
 };
 use uuid::Uuid;
 use wgpu_types::{AddressMode, Face, FilterMode};
+use zerocopy::LittleEndian;
 
 use crate::{
     loaders::texture::TextureAsset,
@@ -40,7 +40,7 @@ pub struct MaterialKey {
 #[uuid = "83269869-1209-408e-8835-bc6f2496e829"]
 pub struct ModelAsset {
     pub asset_ref: AssetRef,
-    pub inner: ModelData,
+    pub inner: ModelData<LittleEndian>,
     pub textures: HashMap<Uuid, Handle<TextureAsset>>,
     pub texture_images: HashMap<Uuid, Handle<Image>>,
     pub materials: HashMap<MaterialKey, Handle<CustomMaterial>>,
@@ -59,9 +59,9 @@ impl AssetLoader for ModelAssetLoader {
         load_context: &'a mut LoadContext,
     ) -> BoxedFuture<'a, Result<(), Error>> {
         Box::pin(async move {
-            let id = locate_asset_id(bytes, Endian::Little)?;
-            let meta = locate_meta(bytes, Endian::Little)?;
-            let data = ModelData::slice(bytes, meta, Endian::Little)?;
+            let id = locate_asset_id::<LittleEndian>(bytes)?;
+            let meta = locate_meta::<LittleEndian>(bytes)?;
+            let data = ModelData::<LittleEndian>::slice(bytes, meta)?;
             // log::info!("Loaded model {:?}", data.head);
             // log::info!("Loaded meshes {:#?}", data.mesh);
             let mut dependencies = HashMap::<Uuid, AssetPath>::new();

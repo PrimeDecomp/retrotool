@@ -244,5 +244,6 @@ fn property_template_type_ui(ui: &mut egui::Ui, value: &mut PropertyTemplateType
         PropertyTemplateType::U64 => {}
         PropertyTemplateType::F32 => {}
         PropertyTemplateType::F64 => {}
+        PropertyTemplateType::PooledString => {}
     }
 }

@@ -1,0 +1,91 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ActorParametersMP1",
+  "type": "property_list",
+  "properties": {
+    "0x0036D778": {
+      "type": "id"
+    },
+    "0xAB68F7A7": {
+      "type": "id"
+    },
+    "0x802A053A": {
+      "type": "id"
+    },
+    "0x74822f37": {
+      "type": "id"
+    },
+    "0x0364A97A": {
+      "type": "id"
+    },
+    "0x36a5a738": {
+      "type": "f32"
+    },
+    "0x6251CCA7": {
+      "type": "bool"
+    },
+    "0x149e3cf2": {
+      "name": "Lighting",
+      "type": "struct",
+      "struct": "LightParametersMP1"
+    },
+    "0xE50D083C": {
+      "name": "Scannable",
+      "type": "struct",
+      "struct": "ScannableParametersMP1"
+    },
+    "0xAF510B78": {
+      "name": "Visor",
+      "type": "struct",
+      "struct": "VisorParametersMP1"
+    },
+    "0x90075D55": {
+      "type": "f32"
+    },
+    "0x1a759ffd": {
+      "name": "FadeInTime",
+      "type": "f32"
+    },
+    "0xDE5135DD": {
+      "name": "FadeOutTime",
+      "type": "f32"
+    },
+    "0xBA89B4E8": {
+      "name": "ThermalMag",
+      "type": "f32"
+    },
+    "0xB222556A": {
+      "name": "WaterSortType",
+      "type": "enum",
+      "enum": "WaterSortType"
+    },
+    "0x8A410818": {
+      "type": "bool"
+    },
+    "0x77066D1B": {
+      "name": "GlobalTimeProvider",
+      "type": "bool"
+    },
+    "0x7e405ee2": {
+      "type": "bool"
+    },
+    "0x050751FB": {
+      "type": "bool"
+    },
+    "0xC8BA5DC9": {
+      "type": "bool"
+    },
+    "0xC7B23A2C": {
+      "type": "bool"
+    },
+    "0x4ACA4EFA": {
+      "type": "bool"
+    },
+    "0x6AD8955D": {
+      "type": "bool"
+    },
+    "0x61b39963": {
+      "type": "bool"
+    }
+  }
+}

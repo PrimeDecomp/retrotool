@@ -51,7 +51,7 @@ pub struct BuiltModel {
 
 pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<BuiltModel> {
     let ModelAsset {
-        inner: ModelData { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers },
+        inner: ModelData { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers, .. },
         ..
     } = asset;
 

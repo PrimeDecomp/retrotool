@@ -6,14 +6,14 @@ use bevy::{
 };
 use bevy_mod_raycast::{Intersection, RaycastSource};
 use egui::Sense;
-use retrolib::format::room::ConstructedPropertyValue;
+use retrolib::format::room::{ConstructedProperty, ConstructedPropertyValue};
 
 use crate::{
     icon,
     loaders::{model::ModelAsset, room::RoomAsset, texture::TextureAsset},
     material::CustomMaterial,
     render::{camera::ModelCamera, grid::GridSettings, TemporaryLabel},
-    tabs::{modcon::ModelLabel, property_with_value, EditorTabSystem, TabState},
+    tabs::{modcon::ModelLabel, property_with_id, property_with_value, EditorTabSystem, TabState},
     AssetRef,
 };
 
@@ -141,10 +141,10 @@ impl EditorTabSystem for RoomTab {
                 // .max_height(rect.height() * 0.25)
                 .show(ui, |ui| {
                     if !room_asset.inner.room_header.parent_room_id.is_nil() {
-                        property_with_value(
+                        property_with_id(
                             ui,
                             "Parent",
-                            format!("{}", room_asset.inner.room_header.parent_room_id),
+                            room_asset.inner.room_header.parent_room_id.into_inner(),
                         );
                     }
                     property_with_value(
@@ -163,43 +163,43 @@ impl EditorTabSystem for RoomTab {
                         format!("{}", room_asset.inner.room_header.unk3),
                     );
                     if !room_asset.inner.room_header.id_b.is_nil() {
-                        property_with_value(
+                        property_with_id(
                             ui,
                             "ID b",
-                            format!("{}", room_asset.inner.room_header.id_b),
+                            room_asset.inner.room_header.id_b.into_inner(),
                         );
                     }
                     if !room_asset.inner.room_header.id_c.is_nil() {
-                        property_with_value(
+                        property_with_id(
                             ui,
                             "ID c",
-                            format!("{}", room_asset.inner.room_header.id_c),
+                            room_asset.inner.room_header.id_c.into_inner(),
                         );
                     }
                     if !room_asset.inner.room_header.id_d.is_nil() {
-                        property_with_value(
+                        property_with_id(
                             ui,
                             "ID d",
-                            format!("{}", room_asset.inner.room_header.id_d),
+                            room_asset.inner.room_header.id_d.into_inner(),
                         );
                     }
                     if !room_asset.inner.room_header.id_e.is_nil() {
-                        property_with_value(
+                        property_with_id(
                             ui,
                             "ID e",
-                            format!("{}", room_asset.inner.room_header.id_e),
+                            room_asset.inner.room_header.id_e.into_inner(),
                         );
                     }
                     if !room_asset.inner.room_header.path_find_area_id.is_nil() {
-                        property_with_value(
+                        property_with_id(
                             ui,
                             "Path Find Area",
-                            format!("{}", room_asset.inner.room_header.path_find_area_id),
+                            room_asset.inner.room_header.path_find_area_id.into_inner(),
                         );
                     }
                     if let Some(light_map) = &room_asset.inner.baked_lighting.light_map {
                         ui.collapsing("Light map data", |ui| {
-                            property_with_value(ui, "Texture ID", format!("{}", light_map.txtr_id));
+                            property_with_id(ui, "Texture ID", light_map.txtr_id.into_inner());
                             // TODO display
                             for id in &light_map.ids {
                                 property_with_value(ui, "Unk ID", format!("{}", id));
@@ -214,31 +214,41 @@ impl EditorTabSystem for RoomTab {
                         });
                     }
                     if let Some(light_probe) = &room_asset.inner.baked_lighting.light_probe {
-                        property_with_value(ui, "Light Probe", format!("{}", light_probe.ltpb_id));
+                        property_with_id(ui, "Light Probe", light_probe.ltpb_id.into_inner());
                     }
                     for (layer_idx, layer) in room_asset.inner.layers.iter().enumerate() {
                         ui.collapsing(
                             format!("Layer {} ({})", layer_idx, layer.header.name),
                             |ui| {
                                 property_with_value(ui, "Name", layer.header.name.clone());
-                                property_with_value(ui, "ID", format!("{}", layer.header.id));
-                                property_with_value(ui, "Unk", format!("{}", layer.header.unk));
+                                property_with_value(ui, "ID", layer.header.id.to_string());
+                                property_with_value(ui, "Unk", layer.header.unk.to_string());
                                 for id in &layer.header.ids {
-                                    property_with_value(ui, "Unk ID", format!("{}", id));
+                                    property_with_value(ui, "Unk ID", id.to_string());
                                 }
-                                property_with_value(ui, "Unk2", format!("{}", layer.header.unk2));
+                                property_with_value(ui, "Unk2", layer.header.unk2.to_string());
                                 for (component_idx, component) in
                                     layer.components.iter().enumerate()
                                 {
-                                    property_with_value(
-                                        ui,
-                                        &format!("Component {component_idx}"),
-                                        format!("{}", component.component_type),
-                                    );
-                                    property_ui(
-                                        ui,
-                                        &room_asset.inner.constructed_properties
-                                            [component.property_index as usize],
+                                    let property = &room_asset.inner.constructed_properties
+                                        [component.property_index as usize];
+                                    ui.collapsing(
+                                        if let Some(name) = &property.name {
+                                            format!("Component {} ({})", component_idx, name)
+                                        } else {
+                                            format!(
+                                                "Component {} ({:#X})",
+                                                component_idx, component.component_type
+                                            )
+                                        },
+                                        |ui| {
+                                            property_with_value(
+                                                ui,
+                                                "Instance index",
+                                                component.instance_index.to_string(),
+                                            );
+                                            property_ui(ui, property);
+                                        },
                                     );
                                 }
                             },
@@ -328,54 +338,112 @@ impl EditorTabSystem for RoomTab {
     fn asset(&self) -> Option<AssetRef> { Some(self.asset_ref) }
 }
 
-fn property_ui(ui: &mut egui::Ui, property: &ConstructedPropertyValue) {
-    match property {
-        ConstructedPropertyValue::ObjectId(id) => {
-            property_with_value(ui, "ID", format!("{id}"));
-        }
-        ConstructedPropertyValue::Enum(value, name) => {
-            property_with_value(ui, &format!("Enum {name}"), format!("{value:#X}"));
-        }
-        ConstructedPropertyValue::Float(value) => {
-            property_with_value(ui, "Float", format!("{value}"));
-        }
-        ConstructedPropertyValue::Struct(prop_struct) => {
-            if !prop_struct.name.is_empty() {
-                property_with_value(ui, "Struct", prop_struct.name.to_string());
-            }
-            for prop in &prop_struct.properties {
-                ui.group(|ui| {
-                    property_with_value(ui, "Property ID", format!("{:#X}", prop.id));
-                    property_ui(ui, &prop.value);
-                });
-            }
-        }
-        ConstructedPropertyValue::Opaque(data) => {
-            ui.label(format!("Opaque data: {:?}", *data));
-        }
+fn property_ui(ui: &mut egui::Ui, property: &ConstructedProperty) {
+    property_with_value(ui, "ID", format!("{:#X}", property.id));
+    if let Some(name) = &property.name {
+        property_with_value(ui, "Name", name.clone());
+    }
+    property_value_ui(ui, &property.value);
+}
+
+fn property_value_ui(ui: &mut egui::Ui, value: &ConstructedPropertyValue) {
+    match value {
         ConstructedPropertyValue::Unknown(data) => {
             ui.label(format!("Unknown data (size {:#X})", data.len()));
         }
-        ConstructedPropertyValue::Int(int) => {
-            property_with_value(ui, "Int", format!("{int}"));
+        ConstructedPropertyValue::Enum(data) => {
+            property_with_value(
+                ui,
+                &format!("Enum {}", data.enum_name),
+                data.enum_value.clone().unwrap_or_else(|| format!("{:#X}", data.value)),
+            );
         }
-        ConstructedPropertyValue::Bool(b) => {
-            property_with_value(ui, "Bool", format!("{b}"));
+        ConstructedPropertyValue::PropertyList(prop_list) => {
+            if !prop_list.name.is_empty() {
+                property_with_value(ui, "Property List", prop_list.name.to_string());
+            }
+            for prop in &prop_list.properties {
+                ui.group(|ui| {
+                    property_with_value(ui, "Property ID", format!("{:#X}", prop.id));
+                    if let Some(name) = &prop.name {
+                        property_with_value(ui, "Name", name.clone());
+                    }
+                    property_value_ui(ui, &prop.value);
+                });
+            }
         }
-        ConstructedPropertyValue::Color(color) => {
-            property_with_value(ui, "Color", format!("{:?}", color.to_array()));
+        ConstructedPropertyValue::Struct(data) => {
+            if !data.name.is_empty() {
+                property_with_value(ui, "Struct", data.name.to_string());
+            }
+            for elem in &data.elements {
+                ui.group(|ui| {
+                    if let Some(name) = &elem.name {
+                        property_with_value(ui, "Name", name.clone());
+                    }
+                    property_value_ui(ui, &elem.value);
+                });
+            }
         }
-        ConstructedPropertyValue::TypedefInterface(kind, value) => {
-            property_with_value(ui, "Typedef", format!("{:?}", kind));
-            property_ui(ui, value);
+        ConstructedPropertyValue::Typedef(data) => {
+            property_with_value(ui, "Typedef ID", format!("{:#X}", data.id));
+            if let Some(name) = &data.name {
+                property_with_value(ui, "Typedef name", name.clone());
+            }
+            property_value_ui(ui, &data.value);
         }
         ConstructedPropertyValue::List(vec) => {
             for (idx, value) in vec.iter().enumerate() {
                 ui.group(|ui| {
                     ui.label(format!("Item {idx}"));
-                    property_ui(ui, value);
+                    property_value_ui(ui, value);
                 });
             }
+        }
+        ConstructedPropertyValue::Id(id) => {
+            property_with_id(ui, "ID", id.into_inner());
+        }
+        ConstructedPropertyValue::Color(color) => {
+            property_with_value(ui, "Color", format!("{:?}", color.to_array()));
+        }
+        ConstructedPropertyValue::Vector(vec) => {
+            property_with_value(ui, "Vector", format!("{:?}", vec.to_array()));
+        }
+        ConstructedPropertyValue::Bool(b) => {
+            property_with_value(ui, "Bool", format!("{b}"));
+        }
+        ConstructedPropertyValue::I8(value) => {
+            property_with_value(ui, "Int8", format!("{value}"));
+        }
+        ConstructedPropertyValue::I16(value) => {
+            property_with_value(ui, "Int16", format!("{value}"));
+        }
+        ConstructedPropertyValue::I32(value) => {
+            property_with_value(ui, "Int32", format!("{value}"));
+        }
+        ConstructedPropertyValue::I64(value) => {
+            property_with_value(ui, "Int64", format!("{value}"));
+        }
+        ConstructedPropertyValue::U8(value) => {
+            property_with_value(ui, "UInt8", format!("{value}"));
+        }
+        ConstructedPropertyValue::U16(value) => {
+            property_with_value(ui, "UInt16", format!("{value}"));
+        }
+        ConstructedPropertyValue::U32(value) => {
+            property_with_value(ui, "UInt32", format!("{value}"));
+        }
+        ConstructedPropertyValue::U64(value) => {
+            property_with_value(ui, "UInt64", format!("{value}"));
+        }
+        ConstructedPropertyValue::F32(value) => {
+            property_with_value(ui, "Float", format!("{value}"));
+        }
+        ConstructedPropertyValue::F64(value) => {
+            property_with_value(ui, "Double", format!("{value}"));
+        }
+        ConstructedPropertyValue::String(value) => {
+            property_with_value(ui, "String", value.clone());
         }
     }
 }

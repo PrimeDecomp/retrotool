@@ -19,6 +19,7 @@ use retrolib::{
     },
     util::file::map_file,
 };
+use zerocopy::{AsBytes, LittleEndian, U32, U64};
 
 #[derive(FromArgs, PartialEq, Debug)]
 /// process PAK files
@@ -68,7 +69,7 @@ pub fn run(args: Args) -> Result<()> {
 
 fn extract(args: ExtractArgs) -> Result<()> {
     let data = map_file(args.input)?;
-    let package = Package::read_full(&data, Endian::Little)?;
+    let package = Package::<LittleEndian>::read_full(&data, Endian::Little)?;
     for asset in &package.assets {
         let asset_names = asset.names.join(", ");
         let name = if asset_names.is_empty() {
@@ -101,27 +102,41 @@ fn extract(args: ExtractArgs) -> Result<()> {
         file.write_all(&asset.data)?;
 
         // Write custom footer
-        FormDescriptor { size: 0, unk: 0, id: K_FORM_FOOT, reader_version: 1, writer_version: 1 }
-            .write(&mut file, Endian::Little, |w| {
-            ChunkDescriptor { id: K_CHUNK_AINF, size: 0, unk: 0, skip: 0 }.write(
+        FormDescriptor::<LittleEndian> {
+            id: K_FORM_FOOT,
+            reader_version: U32::new(1),
+            writer_version: U32::new(1),
+            ..Default::default()
+        }
+        .write(&mut file, |w| {
+            ChunkDescriptor::<LittleEndian> { id: K_CHUNK_AINF, ..Default::default() }.write(
                 w,
-                Endian::Little,
                 |w| {
                     w.write_le(&asset.info)?;
                     Ok(())
                 },
             )?;
             if let Some(meta) = &asset.meta {
-                let meta_chunk =
-                    ChunkDescriptor { id: K_CHUNK_META, size: meta.len() as u64, unk: 0, skip: 0 };
-                w.write_le(&meta_chunk)?;
+                w.write_all(
+                    ChunkDescriptor::<LittleEndian> {
+                        id: K_CHUNK_META,
+                        size: U64::new(meta.len() as u64),
+                        ..Default::default()
+                    }
+                    .as_bytes(),
+                )?;
                 w.write_all(meta)?;
             }
             for name in &asset.names {
                 let bytes = name.as_bytes();
-                let name_chunk =
-                    ChunkDescriptor { id: K_CHUNK_NAME, size: bytes.len() as u64, unk: 0, skip: 0 };
-                w.write_le(&name_chunk)?;
+                w.write_all(
+                    ChunkDescriptor::<LittleEndian> {
+                        id: K_CHUNK_NAME,
+                        size: U64::new(bytes.len() as u64),
+                        ..Default::default()
+                    }
+                    .as_bytes(),
+                )?;
                 w.write_all(bytes)?;
             }
             Ok(())
@@ -133,7 +148,7 @@ fn extract(args: ExtractArgs) -> Result<()> {
 
 fn package(args: PackageArgs) -> Result<()> {
     let files = fs::read_dir(&args.input)?;
-    let mut package = Package { assets: vec![] };
+    let mut package = Package::<LittleEndian>::default();
     for result in files {
         let entry = match result {
             Ok(e) => e,
@@ -143,16 +158,16 @@ fn package(args: PackageArgs) -> Result<()> {
         let path = entry.path();
         log::info!("Processing {}", path.display());
         let data = map_file(&path)?;
-        let (form, _, remain) = FormDescriptor::slice(&data, Endian::Little)?;
+        let (form, _, remain) = FormDescriptor::<LittleEndian>::slice(&data)?;
         // log::info!("Found type {} version {}, {}", form.id, form.version, form.other_version);
-        let (foot, mut foot_data, _) = FormDescriptor::slice(remain, Endian::Little)?;
+        let (foot, mut foot_data, _) = FormDescriptor::<LittleEndian>::slice(remain)?;
         ensure!(foot.id == K_FORM_FOOT);
-        ensure!(foot.reader_version == 1);
+        ensure!(foot.reader_version.get() == 1);
         let mut ainfo: Option<AssetInfo> = None;
         let mut meta: Option<&[u8]> = None;
         let mut names: Vec<String> = vec![];
         while !foot_data.is_empty() {
-            let (chunk, chunk_data, remain) = ChunkDescriptor::slice(foot_data, Endian::Little)?;
+            let (chunk, chunk_data, remain) = ChunkDescriptor::<LittleEndian>::slice(foot_data)?;
             match chunk.id {
                 K_CHUNK_AINF => {
                     ainfo = Some(Cursor::new(chunk_data).read_type(Endian::Little)?);
@@ -177,8 +192,8 @@ fn package(args: PackageArgs) -> Result<()> {
             data: Cow::Owned(data[..data.len() - remain.len()].to_vec()),
             meta: meta.map(|data| Cow::Owned(data.to_vec())),
             info: ainfo,
-            version: form.reader_version,
-            other_version: form.writer_version,
+            version: form.reader_version.get(),
+            other_version: form.writer_version.get(),
         });
     }
     package.assets.sort_by_key(|a| a.id);
@@ -186,7 +201,7 @@ fn package(args: PackageArgs) -> Result<()> {
         BufWriter::new(File::create(&args.output).with_context(|| {
             format!("Failed to create output file '{}'", args.output.display())
         })?);
-    package.write(&mut file, Endian::Little)?;
+    package.write(&mut file)?;
     file.flush()?;
     Ok(())
 }

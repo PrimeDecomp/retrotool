@@ -4,18 +4,21 @@
   "type": "struct",
   "elements": [
     {
-      "type": "u8"
+      "type": "bool"
     },
     {
-      "type": "u8"
+      "type": "bool"
     },
     {
+      "name": "Position",
       "type": "vector"
     },
     {
+      "name": "Rotation",
       "type": "vector"
     },
     {
+      "name": "Scale",
       "type": "vector"
     }
   ]

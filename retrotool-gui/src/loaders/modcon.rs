@@ -5,15 +5,15 @@ use bevy::{
     asset::{AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadedAsset},
     prelude::*,
 };
-use binrw::Endian;
 use retrolib::format::mcon::ModConData;
+use zerocopy::LittleEndian;
 
 use crate::loaders::model::ModelAsset;
 
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "83269869-1209-408e-8835-bc6f2496e82b"]
 pub struct ModConAsset {
-    pub inner: ModConData,
+    pub inner: ModConData<LittleEndian>,
     pub models: Vec<Handle<ModelAsset>>,
 }
 
@@ -30,7 +30,7 @@ impl AssetLoader for ModConAssetLoader {
         load_context: &'a mut LoadContext,
     ) -> BoxedFuture<'a, anyhow::Result<(), Error>> {
         Box::pin(async move {
-            let mcon = ModConData::slice(bytes, Endian::Little)?;
+            let mcon = ModConData::<LittleEndian>::slice(bytes)?;
             // println!("Loaded MCON: {:?}", mcon);
             let mut dependencies = vec![];
             let mut models = vec![];

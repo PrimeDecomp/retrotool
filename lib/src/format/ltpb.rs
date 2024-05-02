@@ -1,7 +1,8 @@
-use std::io::Cursor;
+use std::{io::Cursor, marker::PhantomData};
 
 use anyhow::{bail, ensure, Result};
 use binrw::{binrw, BinReaderExt, Endian};
+use zerocopy::ByteOrder;
 
 use crate::format::{
     chunk::ChunkDescriptor,
@@ -55,29 +56,30 @@ struct SLightProbeMetaData {
 }
 
 #[derive(Debug, Clone)]
-pub struct LightProbeData {
+pub struct LightProbeData<O: ByteOrder> {
     pub head: LightProbeBundleHeader,
-    pub textures: Vec<TextureData>,
+    pub textures: Vec<TextureData<O>>,
     pub extra: Vec<LightProbeExtra>,
+    _marker: PhantomData<O>,
 }
 
-impl LightProbeData {
-    pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<LightProbeData> {
-        let (ltpb_desc, mut ltpb_data, _) = FormDescriptor::slice(data, e)?;
+impl<O: ByteOrder> LightProbeData<O> {
+    pub fn slice(data: &[u8], meta: &[u8]) -> Result<Self> {
+        let (ltpb_desc, mut ltpb_data, _) = FormDescriptor::<O>::slice(data)?;
         ensure!(ltpb_desc.id == K_FORM_LTPB);
-        ensure!(ltpb_desc.reader_version == 66);
-        ensure!(ltpb_desc.writer_version == 73);
+        ensure!(ltpb_desc.reader_version.get() == 66);
+        ensure!(ltpb_desc.writer_version.get() == 73);
 
-        let meta: SLightProbeMetaData = Cursor::new(meta).read_type(e)?;
+        let meta: SLightProbeMetaData = Cursor::new(meta).read_type(Endian::Little)?;
         ensure!(meta.meta_offsets.len() == meta.txtr_offsets.len());
         let texture_count = meta.meta_offsets.len();
 
         let mut head: Option<LightProbeBundleHeader> = None;
         while !ltpb_data.is_empty() {
-            let (chunk_desc, chunk_data, remain) = ChunkDescriptor::slice(ltpb_data, e)?;
+            let (chunk_desc, chunk_data, remain) = ChunkDescriptor::<O>::slice(ltpb_data)?;
             let mut reader = Cursor::new(chunk_data);
             match chunk_desc.id {
-                K_CHUNK_PHDR => head = Some(reader.read_type(e)?),
+                K_CHUNK_PHDR => head = Some(reader.read_type(Endian::Little)?),
                 K_CHUNK_PTEX => {}
                 id => bail!("Unknown LTPB chunk ID {id:?}"),
             }
@@ -92,11 +94,11 @@ impl LightProbeData {
 
             // Skip metadata to read extra fields
             let mut reader = Cursor::new(meta);
-            reader.read_type::<STextureMetaData>(e)?;
-            extra.push(reader.read_type(e)?);
+            reader.read_type::<STextureMetaData>(Endian::Little)?;
+            extra.push(reader.read_type(Endian::Little)?);
 
-            textures.push(TextureData::slice(&data[txtr_offset as usize..], meta, e)?);
+            textures.push(TextureData::<O>::slice(&data[txtr_offset as usize..], meta)?);
         }
-        Ok(LightProbeData { head, textures, extra })
+        Ok(Self { head, textures, extra, _marker: PhantomData })
     }
 }

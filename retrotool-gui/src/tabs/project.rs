@@ -92,11 +92,7 @@ impl ProjectTab {
 }
 
 impl EditorTabSystem for ProjectTab {
-    type LoadParam = (
-        SRes<AssetServer>,
-        SRes<Assets<TextureAsset>>,
-        SResMut<EguiUserTextures>,
-    );
+    type LoadParam = (SRes<AssetServer>, SRes<Assets<TextureAsset>>, SResMut<EguiUserTextures>);
     type UiParam = (SRes<AssetServer>, SRes<Assets<PackageDirectory>>);
 
     fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {

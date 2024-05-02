@@ -39,11 +39,7 @@ pub struct UiTexture {
 
 impl UiTexture {
     #[allow(dead_code)]
-    pub fn new(
-        image: Image,
-        images: &mut Assets<Image>,
-        textures: &mut EguiUserTextures,
-    ) -> Self {
+    pub fn new(image: Image, images: &mut Assets<Image>, textures: &mut EguiUserTextures) -> Self {
         let width = image.texture_descriptor.size.width;
         let height = image.texture_descriptor.size.height;
         let handle = images.add(image);
@@ -56,16 +52,13 @@ impl UiTexture {
         images: &mut Assets<Image>,
         textures: &mut EguiUserTextures,
     ) -> Option<Self> {
-        let Some(image) = images.get(&handle) else { return None; };
+        let Some(image) = images.get(&handle) else {
+            return None;
+        };
         let width = image.texture_descriptor.size.width;
         let height = image.texture_descriptor.size.height;
         let weak_handle = handle.clone_weak();
-        Some(Self {
-            _image: handle,
-            texture_id: textures.add_image(weak_handle),
-            width,
-            height,
-        })
+        Some(Self { _image: handle, texture_id: textures.add_image(weak_handle), width, height })
     }
 
     #[allow(dead_code)]
@@ -96,7 +89,9 @@ impl EditorTabSystem for TextureTab {
         }
 
         let (textures, images, mut egui_textures) = query;
-        let Some(asset) = textures.get(&self.handle) else { return; };
+        let Some(asset) = textures.get(&self.handle) else {
+            return;
+        };
         self.loaded_textures.reserve_exact(asset.slices.len());
         for mip in &asset.slices {
             let mut texture_ids = Vec::with_capacity(mip.len());

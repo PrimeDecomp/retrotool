@@ -9,12 +9,12 @@ use bevy::{
     asset::{AssetIo, AssetIoError, AssetLoader, BoxedFuture, LoadContext, LoadedAsset, Metadata},
     prelude::*,
 };
-use binrw::Endian;
 use retrolib::{
     format::pack::{Package, SparsePackageEntry},
     util::file::map_file,
 };
 use uuid::Uuid;
+use zerocopy::LittleEndian;
 
 #[derive(Debug, Clone, Resource)]
 pub struct SharedPackageInfo {
@@ -28,12 +28,12 @@ struct RetroAssetIo {
 
 fn read_pak_header(path: &Path) -> anyhow::Result<Vec<u8>> {
     let data = map_file(path)?;
-    Package::read_header(&data, Endian::Little)
+    Package::<LittleEndian>::read_header(&data)
 }
 
 fn read_asset(path: &Path, id: Uuid) -> anyhow::Result<Vec<u8>> {
     let data = map_file(path)?;
-    Package::read_asset(&data, id, Endian::Little)
+    Package::<LittleEndian>::read_asset(&data, id)
 }
 
 impl AssetIo for RetroAssetIo {
@@ -167,7 +167,7 @@ impl AssetLoader for PackageAssetLoader {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string(),
-                entries: Package::read_sparse(bytes, Endian::Little)?,
+                entries: Package::<LittleEndian>::read_sparse(bytes)?,
             }));
             Ok(())
         })

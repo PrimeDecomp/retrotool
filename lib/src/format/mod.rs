@@ -21,6 +21,7 @@ use std::{
 use anyhow::Result;
 use binrw::{binrw, BinRead, BinReaderExt, BinResult, BinWrite, BinWriterExt, Endian};
 use uuid::Uuid;
+use zerocopy::{AsBytes, BigEndian, ByteOrder, FromBytes, FromZeroes, LittleEndian};
 
 use crate::{
     array_ref,
@@ -31,7 +32,8 @@ use crate::{
 };
 
 #[binrw]
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Default, FromBytes, FromZeroes, AsBytes)]
+#[repr(C, packed)]
 pub struct FourCC(pub [u8; 4]);
 
 impl FourCC {
@@ -438,24 +440,25 @@ where
     }
 }
 
-pub fn slice_chunks<ChunkCallback, FormCallback>(
-    mut data: &[u8],
-    e: Endian,
+//noinspection RsNeedlessLifetimes
+pub fn slice_chunks<'a, O, ChunkCallback, FormCallback>(
+    mut data: &'a [u8],
     mut chunk_cb: ChunkCallback,
     mut form_cb: FormCallback,
 ) -> Result<()>
 where
-    ChunkCallback: FnMut(&ChunkDescriptor, &[u8]) -> Result<()>,
-    FormCallback: FnMut(&FormDescriptor, &[u8]) -> Result<()>,
+    O: ByteOrder + 'static,
+    ChunkCallback: FnMut(&'a ChunkDescriptor<O>, &'a [u8]) -> Result<()>,
+    FormCallback: FnMut(&'a FormDescriptor<O>, &'a [u8]) -> Result<()>,
 {
     while !data.is_empty() {
         if peek_four_cc(data) == K_CHUNK_RFRM {
-            let (desc, form_data, remain) = FormDescriptor::slice(data, e)?;
-            form_cb(&desc, form_data)?;
+            let (desc, form_data, remain) = FormDescriptor::<O>::slice(data)?;
+            form_cb(desc, form_data)?;
             data = remain;
         } else {
-            let (desc, chunk_data, remain) = ChunkDescriptor::slice(data, e)?;
-            chunk_cb(&desc, chunk_data)?;
+            let (desc, chunk_data, remain) = ChunkDescriptor::<O>::slice(data)?;
+            chunk_cb(desc, chunk_data)?;
             data = remain;
         }
     }
@@ -535,4 +538,44 @@ impl Display for CObjectId {
 
 impl Debug for CObjectId {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result { write!(f, "{:?}", self.0) }
+}
+
+#[derive(Copy, Clone, Debug, AsBytes, FromBytes, FromZeroes)]
+#[repr(C, packed)]
+pub struct ByteOrderUuid<O: ByteOrder> {
+    inner: uuid::Bytes,
+    _marker: PhantomData<O>,
+}
+
+impl<O: ByteOrder + ByteOrderExt> ByteOrderUuid<O> {
+    #[inline(always)]
+    fn new(uuid: Uuid) -> Self { Self { inner: O::uuid_bytes(uuid), _marker: PhantomData } }
+
+    #[inline(always)]
+    fn get(&self) -> Uuid { O::read_uuid(self.inner) }
+
+    // #[inline(always)]
+    // fn set(&mut self, uuid: Uuid) { self.inner = O::uuid_bytes(uuid); }
+}
+
+pub trait ByteOrderExt: ByteOrder {
+    fn read_uuid(bytes: uuid::Bytes) -> Uuid;
+
+    fn uuid_bytes(uuid: Uuid) -> uuid::Bytes;
+}
+
+impl ByteOrderExt for LittleEndian {
+    #[inline(always)]
+    fn read_uuid(bytes: uuid::Bytes) -> Uuid { Uuid::from_bytes_le(bytes) }
+
+    #[inline(always)]
+    fn uuid_bytes(uuid: Uuid) -> uuid::Bytes { uuid.to_bytes_le() }
+}
+
+impl ByteOrderExt for BigEndian {
+    #[inline(always)]
+    fn read_uuid(bytes: uuid::Bytes) -> Uuid { Uuid::from_bytes(bytes) }
+
+    #[inline(always)]
+    fn uuid_bytes(uuid: Uuid) -> uuid::Bytes { *uuid.as_bytes() }
 }

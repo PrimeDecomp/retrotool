@@ -10,6 +10,7 @@ pub mod texture;
 use bevy::{ecs::system::*, prelude::*, render::camera::*};
 use egui::Widget;
 use egui_dock::{NodeIndex, Style, TabIndex};
+use uuid::Uuid;
 
 use crate::{icon, AssetRef};
 
@@ -168,16 +169,25 @@ impl egui_dock::TabViewer for TabViewer<'_> {
     fn clear_background(&self, tab: &Self::Tab) -> bool { tab.clear_background() }
 }
 
-pub fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) {
+pub fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) -> egui::Response {
     ui.horizontal(|ui| {
         ui.label(format!("{}:", name));
-        if egui::Label::new(&value)
+        let response = egui::Label::new(&value)
             .sense(egui::Sense::click())
             .ui(ui)
-            .on_hover_text_at_pointer("Click to copy")
-            .clicked()
-        {
+            .on_hover_text_at_pointer("Click to copy");
+        if response.clicked() {
             ui.output_mut(|out| out.copied_text = value);
+        }
+        response
+    })
+    .inner
+}
+
+pub fn property_with_id(ui: &mut egui::Ui, name: &str, id: Uuid) {
+    property_with_value(ui, name, id.to_string()).context_menu(|ui| {
+        if ui.button("Open").clicked() {
+            ui.output_mut(|out| out.copied_text = id.to_string());
         }
     });
 }

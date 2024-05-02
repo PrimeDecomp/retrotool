@@ -14,6 +14,7 @@ use retrolib::{
     },
     util::file::map_file,
 };
+use zerocopy::LittleEndian;
 
 // CAABoxCollisionTree
 pub const K_FORM_CLSN: FourCC = FourCC(*b"CLSN");
@@ -163,20 +164,20 @@ fn convert(args: ConvertArgs) -> Result<()> {
 
     // TODO: Migrate to real model format (glTF?)
     let data = map_file(&args.input)?;
-    let (form_desc, mut col_data, remain) = FormDescriptor::slice(&data, Endian::Little)?;
+    let (form_desc, mut col_data, remain) = FormDescriptor::<LittleEndian>::slice(&data)?;
 
     if form_desc.id == K_FORM_DCLN {
-        ensure!(form_desc.reader_version == K_DCLN_READER_VERSION);
-        ensure!(form_desc.writer_version == K_DCLN_WRITER_VERSION);
+        ensure!(form_desc.reader_version.get() == K_DCLN_READER_VERSION);
+        ensure!(form_desc.writer_version.get() == K_DCLN_WRITER_VERSION);
     } else if form_desc.id == K_FORM_CLSN {
-        ensure!(form_desc.reader_version == K_CLSN_READER_VERSION);
-        ensure!(form_desc.writer_version == K_CLSN_WRITER_VERSION);
+        ensure!(form_desc.reader_version.get() == K_CLSN_READER_VERSION);
+        ensure!(form_desc.writer_version.get() == K_CLSN_WRITER_VERSION);
     }
 
-    let (foot_desc, _, remain) = FormDescriptor::slice(remain, Endian::Little)?;
+    let (foot_desc, _, remain) = FormDescriptor::<LittleEndian>::slice(remain)?;
     ensure!(foot_desc.id == K_FORM_FOOT);
-    ensure!(foot_desc.reader_version == 1);
-    ensure!(foot_desc.writer_version == 1);
+    ensure!(foot_desc.reader_version.get() == 1);
+    ensure!(foot_desc.writer_version.get() == 1);
     ensure!(remain.is_empty());
 
     //let mut bounds: Option<CAABox> = None;
@@ -187,7 +188,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
     //let mut oboxtree: Option<OBBoxCollisionTree> = None;
 
     while !col_data.is_empty() {
-        let (desc, data, remain) = ChunkDescriptor::slice(col_data, Endian::Little)?;
+        let (desc, data, remain) = ChunkDescriptor::<LittleEndian>::slice(col_data)?;
         /*
         if desc.id == K_CHUNK_INFO {
             //bounds = Some(Cursor::new(data).read_type(Endian::Little)?);

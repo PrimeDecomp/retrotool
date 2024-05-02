@@ -1,0 +1,16 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "MapInfoMP1",
+  "type": "property_list",
+  "properties": {
+    "0x70f8474b": {
+      "type": "i32"
+    },
+    "0x9CAF8D12": {
+      "type": "i32"
+    },
+    "0x91A53221": {
+      "type": "id"
+    }
+  }
+}

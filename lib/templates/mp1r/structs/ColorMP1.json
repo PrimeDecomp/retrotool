@@ -1,0 +1,23 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ColorMP1",
+  "type": "property_list",
+  "properties": {
+    "0x110889D1": {
+      "name": "r",
+      "type": "f32"
+    },
+    "0x8A7AFF22": {
+      "name": "g",
+      "type": "f32"
+    },
+    "0x2A5349E9": {
+      "name": "b",
+      "type": "f32"
+    },
+    "0xE364C93A": {
+      "name": "a",
+      "type": "f32"
+    }
+  }
+}

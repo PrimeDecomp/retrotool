@@ -1,0 +1,81 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "PickupMP1",
+  "type": "property_list",
+  "properties": {
+    "0x70e39ec6": {
+      "name": "CollisionSize",
+      "type": "struct",
+      "struct": "VectorMP1"
+    },
+    "0x2d644844": {
+      "name": "CollisionOffset",
+      "type": "struct",
+      "struct": "VectorMP1"
+    },
+    "0xc79794ee": {
+      "name": "Item",
+      "type": "enum",
+      "enum": "ItemType"
+    },
+    "0x76BE91D5": {
+      "name": "ItemCapacity",
+      "type": "i32"
+    },
+    "0x9FDBD2F6": {
+      "name": "ItemCount",
+      "type": "i32"
+    },
+    "0xfcf349d2": {
+      "name": "Possibility",
+      "type": "f32"
+    },
+    "0x7f2aaf7d": {
+      "name": "LifeTime",
+      "type": "f32"
+    },
+    "0xef930f2b": {
+      "name": "FadeInTime",
+      "type": "f32"
+    },
+    "0xBCE29CB3": {
+      "name": "Asset",
+      "type": "id"
+    },
+    "0x19d911b1": {
+      "name": "CharacterAnimationInformation",
+      "type": "struct",
+      "struct": "AnimationParametersMP1"
+    },
+    "0x3e9f5eff": {
+      "name": "StartDelay",
+      "type": "f32"
+    },
+    "0xe2a07d8e": {
+      "name": "Particles",
+      "type": "id"
+    },
+    "0x853F438A": {
+      "name": "OrbitOffset",
+      "type": "struct",
+      "struct": "VectorMP1"
+    },
+    "0xBA38A80B": {
+      "name": "MapInfo",
+      "type": "struct",
+      "struct": "MapInfoMP1"
+    },
+    "0x68f9d4b6": {
+      "name": "ActorInformation",
+      "type": "struct",
+      "struct": "ActorParametersMP1"
+    },
+    "0xBD71E2F2": {
+      "name": "UseAlphaTransparency",
+      "type": "bool"
+    },
+    "0xf2165c6e": {
+      "type": "bool"
+    }
+  }
+}

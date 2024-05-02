@@ -253,6 +253,13 @@
               "const": "f64"
             }
           }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "pooled_string"
+            }
+          }
         }
       ]
     }

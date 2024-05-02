@@ -1,9 +1,9 @@
 pub mod astc;
-pub mod bcdec;
 pub mod compression;
 pub mod dds;
 pub mod file;
 pub mod lzss;
+pub mod read;
 pub mod templates;
 
 /// Creates a fixed-size array reference from a slice.

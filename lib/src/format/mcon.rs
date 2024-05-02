@@ -1,9 +1,10 @@
-use std::io::Cursor;
+use std::{io::Cursor, marker::PhantomData};
 
-use anyhow::{ensure, Result};
+use anyhow::{bail, ensure, Result};
 use binrw::{binrw, BinReaderExt, Endian};
 use binrw_derive::binread;
 use uuid::Uuid;
+use zerocopy::ByteOrder;
 
 use crate::format::{
     chunk::ChunkDescriptor, peek_four_cc, rfrm::FormDescriptor, CColor4f, CTransform4f, FourCC,
@@ -14,6 +15,8 @@ use crate::format::{
 pub const K_FORM_MCON: FourCC = FourCC(*b"MCON");
 
 const K_CHUNK_MCVD: FourCC = FourCC(*b"MCVD");
+const K_CHUNK_MCHD: FourCC = FourCC(*b"MCHD");
+const K_CHUNK_MCCD: FourCC = FourCC(*b"MCCD");
 
 #[binrw]
 #[derive(Clone, Debug)]
@@ -57,25 +60,31 @@ pub struct SModConVisualData {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModConData {
+pub struct ModConData<O: ByteOrder> {
     pub visual_data: Option<SModConVisualData>,
+    _marker: PhantomData<O>,
 }
 
-impl ModConData {
-    pub fn slice(data: &[u8], e: Endian) -> Result<Self> {
-        let (mcon_desc, mut mcon_data, _) = FormDescriptor::slice(data, e)?;
+impl<O: ByteOrder> ModConData<O> {
+    pub fn slice(data: &[u8]) -> Result<Self> {
+        let (mcon_desc, mut mcon_data, _) = FormDescriptor::<O>::slice(data)?;
         ensure!(mcon_desc.id == K_FORM_MCON);
-        ensure!(mcon_desc.reader_version == 41);
-        ensure!(mcon_desc.writer_version == 44);
+        ensure!(mcon_desc.reader_version.get() == 41);
+        ensure!(mcon_desc.writer_version.get() == 44);
 
-        let mut data = ModConData { visual_data: None };
+        let mut data = Self { visual_data: None, _marker: PhantomData };
         while !mcon_data.is_empty() {
             if peek_four_cc(mcon_data) == *b"PEEK" {
                 break;
             }
-            let (chunk_desc, chunk_data, remain) = ChunkDescriptor::slice(mcon_data, e)?;
-            if chunk_desc.id == K_CHUNK_MCVD {
-                data.visual_data = Some(Cursor::new(chunk_data).read_type(e)?);
+            let (chunk_desc, chunk_data, remain) = ChunkDescriptor::<O>::slice(mcon_data)?;
+            match chunk_desc.id {
+                K_CHUNK_MCVD => {
+                    data.visual_data = Some(Cursor::new(chunk_data).read_type(Endian::Little)?)
+                }
+                K_CHUNK_MCHD => { /* TODO */ }
+                K_CHUNK_MCCD => { /* TODO */ }
+                id => bail!("Unknown MCON chunk ID {id:?}"),
             }
             mcon_data = remain;
         }

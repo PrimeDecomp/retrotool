@@ -37,7 +37,9 @@ impl EditorTabSystem for LightProbeTab {
         }
 
         let (assets, images, mut egui_textures) = query;
-        let Some(asset) = assets.get(&self.handle) else { return; };
+        let Some(asset) = assets.get(&self.handle) else {
+            return;
+        };
 
         self.loaded_textures.reserve_exact(asset.textures.len());
         for texture in &asset.textures {
@@ -84,7 +86,9 @@ impl EditorTabSystem for LightProbeTab {
             }
         };
 
-        let Some(asset) = assets.get(&self.handle) else { return; };
+        let Some(asset) = assets.get(&self.handle) else {
+            return;
+        };
 
         for (txtr_idx, txtr) in asset.textures.iter().enumerate() {
             ui.group(|ui| {

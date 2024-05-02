@@ -1069,13 +1069,23 @@
     "0x8ebcff02": "PerformanceTestPathCameraMP1BehaviorData"
   },
   "structs": [
-    "ModelLightingData",
+    "ActorParametersMP1",
+    "AnimationParametersMP1",
+    "ColorMP1",
     "DepthBiasOverride",
+    "LightParametersMP1",
+    "MapInfoMP1",
+    "MaterialDataOverride",
+    "ModelLightingData",
     "RenderStaticModelFlags",
     "RenderStaticModelSort",
-    "MaterialDataOverride"
+    "ScannableParametersMP1",
+    "VectorMP1",
+    "VisorParametersMP1"
   ],
   "enums": [
-    "RenderTargetScene"
+    "ItemType",
+    "RenderTargetScene",
+    "WaterSortType"
   ]
 }

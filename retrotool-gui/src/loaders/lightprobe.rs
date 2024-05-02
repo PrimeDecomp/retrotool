@@ -4,11 +4,11 @@ use bevy::{
     prelude::*,
     render::{renderer::RenderDevice, texture::CompressedImageFormats},
 };
-use binrw::Endian;
 use retrolib::format::{
     foot::{locate_asset_id, locate_meta},
     ltpb::{LightProbeBundleHeader, LightProbeData, LightProbeExtra, K_FORM_LTPB},
 };
+use zerocopy::LittleEndian;
 
 use crate::{
     loaders::texture::{load_texture_asset, TextureAsset},
@@ -44,9 +44,9 @@ impl AssetLoader for LightProbeAssetLoader {
         load_context: &'a mut LoadContext,
     ) -> BoxedFuture<'a, Result<(), Error>> {
         Box::pin(async move {
-            let id = locate_asset_id(bytes, Endian::Little)?;
-            let meta = locate_meta(bytes, Endian::Little)?;
-            let data = LightProbeData::slice(bytes, meta, Endian::Little)?;
+            let id = locate_asset_id::<LittleEndian>(bytes)?;
+            let meta = locate_meta::<LittleEndian>(bytes)?;
+            let data = LightProbeData::<LittleEndian>::slice(bytes, meta)?;
             info!("Loading light probe {} {:?}", id, data.head);
 
             let mut textures = Vec::with_capacity(data.textures.len());

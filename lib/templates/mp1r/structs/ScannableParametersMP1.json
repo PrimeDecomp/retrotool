@@ -1,0 +1,14 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ScannableParametersMP1",
+  "type": "property_list",
+  "properties": {
+    "0x1A73E2B4": {
+      "name": "ScannableInfo0",
+      "type": "id"
+    },
+    "0x05264039": {
+      "type": "bool"
+    }
+  }
+}

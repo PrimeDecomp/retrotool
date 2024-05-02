@@ -12,7 +12,6 @@ use bevy::{
         texture::{CompressedImageFormats, ImageSampler},
     },
 };
-use binrw::Endian;
 use retrolib::format::{
     foot::{locate_asset_id, locate_meta},
     txtr::{
@@ -21,6 +20,7 @@ use retrolib::format::{
 };
 use wgpu::SamplerDescriptor;
 use wgpu_types::{AddressMode, FilterMode};
+use zerocopy::LittleEndian;
 
 use crate::AssetRef;
 
@@ -28,7 +28,7 @@ use crate::AssetRef;
 #[uuid = "83269869-1209-408e-8835-bc6f2496e828"]
 pub struct TextureAsset {
     pub asset_ref: AssetRef,
-    pub inner: TextureData,
+    pub inner: TextureData<LittleEndian>,
     pub texture: Handle<Image>,
     pub slices: Vec<Vec<Handle<Image>>>, // [mip][layer]
 }
@@ -54,9 +54,9 @@ impl AssetLoader for TextureAssetLoader {
         load_context: &'a mut LoadContext,
     ) -> BoxedFuture<'a, Result<(), Error>> {
         Box::pin(async move {
-            let id = locate_asset_id(bytes, Endian::Little)?;
-            let meta = locate_meta(bytes, Endian::Little)?;
-            let data = TextureData::slice(bytes, meta, Endian::Little)?;
+            let id = locate_asset_id::<LittleEndian>(bytes)?;
+            let meta = locate_meta::<LittleEndian>(bytes)?;
+            let data = TextureData::<LittleEndian>::slice(bytes, meta)?;
             info!("Loading texture {} {:?}", id, data.head);
 
             let result = load_texture_asset(data, &self.supported_formats)?;
@@ -87,13 +87,13 @@ impl AssetLoader for TextureAssetLoader {
 }
 
 pub struct LoadTextureResult {
-    pub inner: TextureData,
+    pub inner: TextureData<LittleEndian>,
     pub texture: Image,
     pub slices: Vec<Vec<Image>>, // [mip][layer]
 }
 
 pub fn load_texture_asset(
-    data: TextureData,
+    data: TextureData<LittleEndian>,
     supported_formats: &CompressedImageFormats,
 ) -> Result<LoadTextureResult> {
     let is_srgb = data.head.format.is_srgb();
@@ -198,7 +198,7 @@ const DEFAULT_SAMPLER: ImageSampler = ImageSampler::Descriptor(SamplerDescriptor
 
 /// Creates an [Image] from a full texture.
 fn texture_to_image(
-    data: &TextureData,
+    data: &TextureData<LittleEndian>,
     format: TextureFormat,
     image_data: Vec<u8>,
 ) -> Result<Image> {

@@ -1,8 +1,9 @@
-use std::io::Cursor;
+use std::{io::Cursor, marker::PhantomData};
 
 use anyhow::{bail, ensure, Result};
 use binrw::{binrw, BinReaderExt, Endian};
 use uuid::Uuid;
+use zerocopy::ByteOrder;
 
 use crate::{
     format::{
@@ -812,7 +813,7 @@ fn decompress_gpu_buffers(
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelData {
+pub struct ModelData<O: ByteOrder> {
     pub head: SModelHeader,
     pub mtrl: SMaterialChunk,
     pub mesh: SMeshLoadInformation,
@@ -820,28 +821,31 @@ pub struct ModelData {
     pub ibuf: SIndexBufferInfoSection,
     pub vtx_buffers: Vec<Vec<u8>>,
     pub idx_buffers: Vec<Vec<u8>>,
+    _marker: PhantomData<O>,
 }
 
-impl ModelData {
-    pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<ModelData> {
-        let (cmdl_desc, cmdl_data, _) = FormDescriptor::slice(data, e)?;
+impl<O> ModelData<O>
+where O: ByteOrder + 'static
+{
+    pub fn slice(data: &[u8], meta: &[u8]) -> Result<Self> {
+        let (cmdl_desc, cmdl_data, _) = FormDescriptor::<O>::slice(data)?;
         match cmdl_desc.id {
             K_FORM_CMDL => {
-                ensure!(cmdl_desc.reader_version == 114);
-                ensure!(cmdl_desc.writer_version == 125);
+                ensure!(cmdl_desc.reader_version.get() == 114);
+                ensure!(cmdl_desc.writer_version.get() == 125);
             }
             K_FORM_SMDL => {
-                ensure!(cmdl_desc.reader_version == 127);
-                ensure!(cmdl_desc.writer_version == 133);
+                ensure!(cmdl_desc.reader_version.get() == 127);
+                ensure!(cmdl_desc.writer_version.get() == 133);
             }
             K_FORM_WMDL => {
-                ensure!(cmdl_desc.reader_version == 118);
-                ensure!(cmdl_desc.writer_version == 124);
+                ensure!(cmdl_desc.reader_version.get() == 118);
+                ensure!(cmdl_desc.writer_version.get() == 124);
             }
             id => bail!("Unknown FourCC {:?}", id),
         }
 
-        let meta: SModelMetaData = Cursor::new(meta).read_type(e)?;
+        let meta: SModelMetaData = Cursor::new(meta).read_type(Endian::Little)?;
         let vtx_buffers = decompress_gpu_buffers(data, &meta.read_info, &meta.vtx_buffer_info)?;
         let idx_buffers = decompress_gpu_buffers(data, &meta.read_info, &meta.idx_buffer_info)?;
 
@@ -850,18 +854,17 @@ impl ModelData {
         let mut mesh: Option<SMeshLoadInformation> = None;
         let mut vbuf: Option<SVertexBufferInfoSection> = None;
         let mut ibuf: Option<SIndexBufferInfoSection> = None;
-        slice_chunks(
+        slice_chunks::<O, _, _>(
             cmdl_data,
-            e,
             |desc, data| {
                 match desc.id {
                     K_CHUNK_HEAD | K_CHUNK_SKHD | K_CHUNK_WDHD => {
-                        head = Some(Cursor::new(data).read_type(e)?)
+                        head = Some(Cursor::new(data).read_type(Endian::Little)?)
                     }
-                    K_CHUNK_MTRL => mtrl = Some(Cursor::new(data).read_type(e)?),
-                    K_CHUNK_MESH => mesh = Some(Cursor::new(data).read_type(e)?),
-                    K_CHUNK_VBUF => vbuf = Some(Cursor::new(data).read_type(e)?),
-                    K_CHUNK_IBUF => ibuf = Some(Cursor::new(data).read_type(e)?),
+                    K_CHUNK_MTRL => mtrl = Some(Cursor::new(data).read_type(Endian::Little)?),
+                    K_CHUNK_MESH => mesh = Some(Cursor::new(data).read_type(Endian::Little)?),
+                    K_CHUNK_VBUF => vbuf = Some(Cursor::new(data).read_type(Endian::Little)?),
+                    K_CHUNK_IBUF => ibuf = Some(Cursor::new(data).read_type(Endian::Little)?),
                     // GPU data decompressed via META
                     K_CHUNK_GPU => {}
                     id => bail!("Unknown {} chunk {id:?}", cmdl_desc.id),
@@ -882,6 +885,6 @@ impl ModelData {
         // log::debug!("VBUF: {vbuf:#?}");
         // log::debug!("IBUF: {ibuf:#?}");
 
-        Ok(ModelData { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers })
+        Ok(Self { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers, _marker: PhantomData })
     }
 }

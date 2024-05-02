@@ -104,22 +104,17 @@ impl Node for GridCameraDriver {
         let view_uniforms = world.resource::<ViewUniforms>();
 
         let view_entity = graph.get_input_entity(Self::IN_VIEW)?;
-        let Ok((
-           target,
-           offset,
-           camera,
-           pipeline_ids,
-           settings,
-        )) = self.view_query.get_manual(world, view_entity)
-        else { return Ok(()); };
+        let Ok((target, offset, camera, pipeline_ids, settings)) =
+            self.view_query.get_manual(world, view_entity)
+        else {
+            return Ok(());
+        };
 
-        let (
-            Some(pipeline),
-            Some(resource),
-        ) = (
-            pipeline_cache.get_render_pipeline(pipeline_ids.id),
-            view_uniforms.uniforms.binding(),
-        ) else { return Ok(()); };
+        let (Some(pipeline), Some(resource)) =
+            (pipeline_cache.get_render_pipeline(pipeline_ids.id), view_uniforms.uniforms.binding())
+        else {
+            return Ok(());
+        };
 
         render_context.command_encoder().push_debug_group("grid");
         {

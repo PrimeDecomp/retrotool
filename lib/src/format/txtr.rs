@@ -2,6 +2,7 @@ use std::{
     cmp::max,
     fmt::{Display, Formatter},
     io::Cursor,
+    marker::PhantomData,
     num::NonZeroUsize,
     ops::Range,
 };
@@ -13,17 +14,11 @@ use image::{
     RgbaImage,
 };
 use tegra_swizzle::surface::BlockDim;
+use zerocopy::ByteOrder;
 
 use crate::{
     format::{chunk::ChunkDescriptor, rfrm::FormDescriptor, FourCC},
-    util::{
-        bcdec::{
-            bcdec_bc1, bcdec_bc2, bcdec_bc3, bcdec_bc4, bcdec_bc5, bcdec_bc6h_float, bcdec_bc7,
-            BC1_BLOCK_SIZE, BC2_BLOCK_SIZE, BC3_BLOCK_SIZE, BC4_BLOCK_SIZE, BC5_BLOCK_SIZE,
-            BC6H_BLOCK_SIZE, BC7_BLOCK_SIZE,
-        },
-        compression::decompress_into,
-    },
+    util::compression::decompress_into,
 };
 
 // Texture
@@ -569,26 +564,27 @@ fn deswizzle(header: &STextureHeader, data: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextureData {
+pub struct TextureData<O: ByteOrder> {
     pub head: STextureHeader,
     pub data: Vec<u8>,
+    _marker: PhantomData<O>,
 }
 
-impl TextureData {
-    pub fn slice(data: &[u8], meta: &[u8], e: Endian) -> Result<TextureData> {
-        let (txtr_desc, txtr_data, _) = FormDescriptor::slice(data, e)?;
+impl<O: ByteOrder> TextureData<O> {
+    pub fn slice(data: &[u8], meta: &[u8]) -> Result<Self> {
+        let (txtr_desc, txtr_data, _) = FormDescriptor::<O>::slice(data)?;
         ensure!(txtr_desc.id == K_FORM_TXTR);
-        ensure!(txtr_desc.reader_version == 47);
-        ensure!(txtr_desc.writer_version == 51);
+        ensure!(txtr_desc.reader_version.get() == 47);
+        ensure!(txtr_desc.writer_version.get() == 51);
 
-        let (head_desc, head_data, _) = ChunkDescriptor::slice(txtr_data, e)?;
+        let (head_desc, head_data, _) = ChunkDescriptor::<O>::slice(txtr_data)?;
         ensure!(head_desc.id == K_CHUNK_HEAD);
-        let head: STextureHeader = Cursor::new(head_data).read_type(e)?;
+        let head: STextureHeader = Cursor::new(head_data).read_type(Endian::Little)?;
 
         // log::debug!("META: {meta:#?}");
         // log::debug!("HEAD: {head:#?}");
 
-        let meta: STextureMetaData = Cursor::new(meta).read_type(e)?;
+        let meta: STextureMetaData = Cursor::new(meta).read_type(Endian::Little)?;
         let mut buffer = vec![0u8; meta.decompressed_size as usize];
         for info in &meta.buffers {
             let (read_idx, read) = meta
@@ -607,7 +603,7 @@ impl TextureData {
             )?;
         }
         let deswizzled = deswizzle(&head, &buffer)?;
-        Ok(TextureData { head, data: deswizzled })
+        Ok(Self { head, data: deswizzled, _marker: PhantomData })
     }
 }
 
@@ -618,7 +614,7 @@ pub struct TextureSlice {
     pub data_range: Range<usize>,
 }
 
-pub fn slice_texture(texture: &TextureData) -> Result<Vec<Vec<TextureSlice>>> {
+pub fn slice_texture<O: ByteOrder>(texture: &TextureData<O>) -> Result<Vec<Vec<TextureSlice>>> {
     let (bw, bh, bd) = texture.head.format.block_size();
     let mut out = Vec::with_capacity(texture.head.mip_sizes.len());
     let mut w = texture.head.width;
@@ -665,6 +661,14 @@ pub fn slice_texture(texture: &TextureData) -> Result<Vec<Vec<TextureSlice>>> {
     Ok(out)
 }
 
+const BC1_BLOCK_SIZE: usize = 8;
+const BC2_BLOCK_SIZE: usize = 16;
+const BC3_BLOCK_SIZE: usize = 16;
+const BC4_BLOCK_SIZE: usize = 8;
+const BC5_BLOCK_SIZE: usize = 16;
+const BC6H_BLOCK_SIZE: usize = 16;
+const BC7_BLOCK_SIZE: usize = 16;
+
 pub fn decompress_image(
     format: ETextureFormat,
     w: u32,
@@ -699,30 +703,30 @@ pub fn decompress_image(
             })?,
         ),
         ETextureFormat::RgbaBc1Unorm | ETextureFormat::RgbaBc1Srgb => DynamicImage::ImageRgba8(
-            decompress_bcn::<Rgba<u8>, _, BC1_BLOCK_SIZE>(data, w, h, |src, dst, pitch| unsafe {
-                bcdec_bc1(src, dst, pitch)
+            decompress_bcn::<Rgba<u8>, _, BC1_BLOCK_SIZE>(data, w, h, |src, dst, pitch| {
+                bcdec_rs::bc1(src, dst, pitch)
             })?,
         ),
         ETextureFormat::RgbaBc2Unorm | ETextureFormat::RgbaBc2Srgb => DynamicImage::ImageRgba8(
-            decompress_bcn::<Rgba<u8>, _, BC2_BLOCK_SIZE>(data, w, h, |src, dst, pitch| unsafe {
-                bcdec_bc2(src, dst, pitch)
+            decompress_bcn::<Rgba<u8>, _, BC2_BLOCK_SIZE>(data, w, h, |src, dst, pitch| {
+                bcdec_rs::bc2(src, dst, pitch)
             })?,
         ),
         ETextureFormat::RgbaBc3Unorm | ETextureFormat::RgbaBc3Srgb => DynamicImage::ImageRgba8(
-            decompress_bcn::<Rgba<u8>, _, BC3_BLOCK_SIZE>(data, w, h, |src, dst, pitch| unsafe {
-                bcdec_bc3(src, dst, pitch)
+            decompress_bcn::<Rgba<u8>, _, BC3_BLOCK_SIZE>(data, w, h, |src, dst, pitch| {
+                bcdec_rs::bc3(src, dst, pitch)
             })?,
         ),
         // TODO snorm?
         ETextureFormat::RgbaBc4Unorm | ETextureFormat::RgbaBc4Snorm => DynamicImage::ImageLuma8(
-            decompress_bcn::<Luma<u8>, _, BC4_BLOCK_SIZE>(data, w, h, |src, dst, pitch| unsafe {
-                bcdec_bc4(src, dst, pitch)
+            decompress_bcn::<Luma<u8>, _, BC4_BLOCK_SIZE>(data, w, h, |src, dst, pitch| {
+                bcdec_rs::bc4(src, dst, pitch)
             })?,
         ),
         // TODO snorm?
         ETextureFormat::RgbaBc5Unorm | ETextureFormat::RgbaBc5Snorm => DynamicImage::ImageLumaA8(
-            decompress_bcn::<LumaA<u8>, _, BC5_BLOCK_SIZE>(data, w, h, |src, dst, pitch| unsafe {
-                bcdec_bc5(src, dst, pitch)
+            decompress_bcn::<LumaA<u8>, _, BC5_BLOCK_SIZE>(data, w, h, |src, dst, pitch| {
+                bcdec_rs::bc5(src, dst, pitch)
             })?,
         ),
         ETextureFormat::Rgba16Unorm => DynamicImage::ImageRgba16(
@@ -789,12 +793,12 @@ pub fn decompress_image(
                 data,
                 w,
                 h,
-                |src, dst, pitch| unsafe { bcdec_bc6h_float(src, dst, pitch, is_signed) },
+                |src, dst, pitch| bcdec_rs::bc6h_float(src, dst, pitch, is_signed),
             )?)
         }
         ETextureFormat::BptcUnorm | ETextureFormat::BptcUnormSrgb => DynamicImage::ImageRgba8(
-            decompress_bcn::<Rgba<u8>, _, BC7_BLOCK_SIZE>(data, w, h, |src, dst, pitch| unsafe {
-                bcdec_bc7(src, dst, pitch)
+            decompress_bcn::<Rgba<u8>, _, BC7_BLOCK_SIZE>(data, w, h, |src, dst, pitch| {
+                bcdec_rs::bc7(src, dst, pitch)
             })?,
         ),
         format => bail!("Unsupported conversion from {format:?}"),
@@ -809,20 +813,20 @@ fn decompress_bcn<P, F, const BLOCK_SIZE: usize>(
 ) -> Result<ImageBuffer<P, Vec<P::Subpixel>>>
 where
     P: Pixel,
-    F: Fn(*const u8, *mut u8, u32),
+    F: Fn(&[u8], &mut [P::Subpixel], usize),
 {
     let w = max(w, 4);
     let h = max(h, 4);
     ensure!(data.len() == ((w / 4) * (h / 4)) as usize * BLOCK_SIZE);
     let mut image = ImageBuffer::<P, Vec<P::Subpixel>>::new(w, h);
-    let mut src = data.as_ptr();
-    for i in (0..h).step_by(4) {
-        for j in (0..w).step_by(4) {
-            unsafe {
-                let dst = image.as_mut_ptr().add(((i * w + j) * P::CHANNEL_COUNT as u32) as usize);
-                func(src, dst.cast(), w * P::CHANNEL_COUNT as u32);
-                src = src.add(BLOCK_SIZE);
-            }
+    let buffer = image.as_flat_samples_mut();
+    let mut src = data;
+    for i in (0..h as usize).step_by(4) {
+        for j in (0..w as usize).step_by(4) {
+            let start = i * buffer.layout.height_stride + j * buffer.layout.width_stride;
+            let dst = &mut buffer.samples[start..];
+            func(&src[..BLOCK_SIZE], dst, buffer.layout.height_stride);
+            src = &src[BLOCK_SIZE..];
         }
     }
     Ok(image)

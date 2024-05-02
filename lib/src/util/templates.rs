@@ -1,10 +1,102 @@
-use std::fmt;
+use std::{fmt, io::BufReader, path::Path};
 
+use anyhow::Context;
 use indexmap::IndexMap;
 use serde::{de, ser};
 use serde_derive::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use strum::{EnumDiscriminants, EnumIter, EnumMessage, FromRepr};
+
+#[derive(Clone, Debug)]
+pub struct TemplateDatabase {
+    pub root: TemplateRoot,
+    pub objects: IndexMap<HexU32, TypeTemplate>,
+    pub typedefs: IndexMap<HexU32, TypeTemplate>,
+    pub structs: IndexMap<String, TypeTemplate>,
+    pub enums: IndexMap<String, TypeTemplate>,
+}
+
+impl TemplateDatabase {
+    pub fn find_object(&self, id: u32) -> (Option<&String>, Option<&TypeTemplate>) {
+        (self.root.objects.get(&HexU32(id)), self.objects.get(&HexU32(id)))
+    }
+
+    pub fn find_typedef(&self, id: u32) -> (Option<&String>, Option<&TypeTemplate>) {
+        (self.root.typedefs.get(&HexU32(id)), self.typedefs.get(&HexU32(id)))
+    }
+
+    pub fn find_struct(&self, name: &str) -> Option<&TypeTemplate> { self.structs.get(name) }
+
+    pub fn find_enum(&self, name: &str) -> Option<&TypeTemplate> { self.enums.get(name) }
+}
+
+pub fn load_templates(path: &Path) -> anyhow::Result<Box<TemplateDatabase>> {
+    let root: TemplateRoot = {
+        let root_path = path.join("root.json");
+        let file = std::fs::File::open(root_path.as_path())
+            .with_context(|| format!("Failed to open {}", root_path.display()))?;
+        serde_json::from_reader(BufReader::new(file))
+            .with_context(|| format!("While reading {}", root_path.display()))?
+    };
+    let mut database = Box::new(TemplateDatabase {
+        root,
+        objects: IndexMap::new(),
+        typedefs: IndexMap::new(),
+        structs: IndexMap::new(),
+        enums: IndexMap::new(),
+    });
+    for (id, name) in &database.root.objects {
+        let type_path = path.join("objects").join(format!("{}.json", name));
+        if !type_path.exists() {
+            continue;
+        }
+        let file = std::fs::File::open(type_path.as_path())
+            .with_context(|| format!("Failed to read {}", type_path.display()))?;
+        let template = serde_json::from_reader(BufReader::new(file))
+            .with_context(|| format!("While parsing {}", type_path.display()))?;
+        database.objects.insert(*id, template);
+        log::info!("Loaded object template {}", name)
+    }
+    for (id, name) in &database.root.typedefs {
+        let type_path = path.join("typedefs").join(format!("{}.json", name));
+        if !type_path.exists() {
+            continue;
+        }
+        let file = std::fs::File::open(type_path.as_path())
+            .with_context(|| format!("Failed to read {}", type_path.display()))?;
+        let template = serde_json::from_reader(BufReader::new(file))
+            .with_context(|| format!("While parsing {}", type_path.display()))?;
+        database.typedefs.insert(*id, template);
+        log::info!("Loaded typedef template {}", name)
+    }
+    for name in &database.root.structs {
+        let type_path = path.join("structs").join(format!("{}.json", name));
+        if !type_path.exists() {
+            log::warn!("Struct template {} not found", name);
+            continue;
+        }
+        let file = std::fs::File::open(type_path.as_path())
+            .with_context(|| format!("Failed to read {}", type_path.display()))?;
+        let template = serde_json::from_reader(BufReader::new(file))
+            .with_context(|| format!("While parsing {}", type_path.display()))?;
+        database.structs.insert(name.clone(), template);
+        log::info!("Loaded struct template {}", name)
+    }
+    for name in &database.root.enums {
+        let type_path = path.join("enums").join(format!("{}.json", name));
+        if !type_path.exists() {
+            log::warn!("Enum template {} not found", name);
+            continue;
+        }
+        let file = std::fs::File::open(type_path.as_path())
+            .with_context(|| format!("Failed to read {}", type_path.display()))?;
+        let template = serde_json::from_reader(BufReader::new(file))
+            .with_context(|| format!("While parsing {}", type_path.display()))?;
+        database.enums.insert(name.clone(), template);
+        log::info!("Loaded enum template {}", name)
+    }
+    Ok(database)
+}
 
 pub fn load_type_template(contents: &str) -> anyhow::Result<TypeTemplate> {
     serde_json::from_str(contents).map_err(|e| e.into())
@@ -227,6 +319,9 @@ pub enum PropertyTemplateType {
     #[serde(rename = "f64")]
     #[strum_discriminants(strum(message = "F64"))]
     F64,
+    #[serde(rename = "pooled_string")]
+    #[strum_discriminants(strum(message = "Pooled String"))]
+    PooledString,
 }
 
 impl FromRepr for PropertyTemplateType {
@@ -274,7 +369,7 @@ pub struct EnumTemplate {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct EnumElement {
-    pub name: String,
+    pub name: Option<String>,
     pub description: Option<String>,
     pub value: HexU32,
 }

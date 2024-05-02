@@ -1,0 +1,21 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "VisorParametersMP1",
+  "type": "property_list",
+  "properties": {
+    "0x82f75015": {
+      "type": "bool"
+    },
+    "0x5149fc12": {
+      "type": "bool"
+    },
+    "0x1382ca50": {
+      "type": "bool"
+    },
+    "0x528a56a5": {
+      "name": "VisorFlags",
+      "type": "u32",
+      "description": "TODO: flags"
+    }
+  }
+}

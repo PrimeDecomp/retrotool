@@ -27,6 +27,7 @@ use retrolib::{
 };
 use serde_json::json;
 use uuid::Uuid;
+use zerocopy::LittleEndian;
 
 #[derive(FromArgs, PartialEq, Debug)]
 /// process CMDL files
@@ -117,9 +118,9 @@ struct Rgba16F {
 fn convert(args: ConvertArgs) -> Result<()> {
     let data = map_file(&args.input)?;
     let dir = args.input.parent().unwrap_or(Path::new("."));
-    let meta = locate_meta(&data, Endian::Little)?;
-    let ModelData { head, mtrl, mesh, vbuf, ibuf, mut vtx_buffers, idx_buffers } =
-        ModelData::slice(&data, meta, Endian::Little)?;
+    let meta = locate_meta::<LittleEndian>(&data)?;
+    let ModelData { head, mtrl, mesh, vbuf, ibuf, mut vtx_buffers, idx_buffers, .. } =
+        ModelData::<LittleEndian>::slice(&data, meta)?;
 
     // Build buffer to component index
     let mut buf_infos: Vec<VertexBufferInfo> = Vec::with_capacity(vtx_buffers.len());
@@ -532,8 +533,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
             {
                 log::info!("Converting TXTR {}", texture.id);
                 let txtr_file = map_file(in_dir.join(format!("{}.TXTR", texture.id)))?;
-                let meta = locate_meta(&txtr_file, Endian::Little)?;
-                let txtr = TextureData::slice(&txtr_file, meta, Endian::Little)?;
+                let meta = locate_meta::<LittleEndian>(&txtr_file)?;
+                let txtr = TextureData::<LittleEndian>::slice(&txtr_file, meta)?;
                 let slice = &slice_texture(&txtr)?[0][0];
                 let image = decompress_image(
                     txtr.head.format,
