@@ -26,7 +26,7 @@ bytemuck = { version = "1.13.0", features = ["min_const_generics"] }
 egui = { version = "0.21.0", features = ["mint"] }
 egui_dock = { git = "https://github.com/encounter/egui_dock.git", branch = "updates" }
 #egui_dock = { path = "../../egui_dock" }
-half = { git = "https://github.com/encounter/half-rs", branch = "inline", features = ["bytemuck"] }
+half = { version = "2.4.1", features = ["bytemuck"] }
 image = "0.24.5"
 indexmap = "1.9.2"
 log = "0.4.17"
