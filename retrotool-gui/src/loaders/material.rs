@@ -9,6 +9,7 @@ use zerocopy::LittleEndian;
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "83269869-1209-408e-8835-bc6f2496e82a"]
 pub struct MaterialAsset {
+    #[allow(unused)]
     pub inner: ModelData<LittleEndian>,
 }
 

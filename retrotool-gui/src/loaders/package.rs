@@ -58,16 +58,13 @@ impl AssetIo for RetroAssetIo {
                 let Some(package_path) = package_path else {
                     return Err(AssetIoError::NotFound(path.to_owned()));
                 };
-                read_asset(&package_path, id).map_err(|e| {
-                    AssetIoError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-                })
+                read_asset(&package_path, id)
+                    .map_err(|e| AssetIoError::Io(std::io::Error::other(e)))
             })
         } else if path.extension() == Some("pak".as_ref()) {
             // Load pak header only
             Box::pin(async move {
-                read_pak_header(path).map_err(|e| {
-                    AssetIoError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-                })
+                read_pak_header(path).map_err(|e| AssetIoError::Io(std::io::Error::other(e)))
             })
         } else {
             self.default.load_path(path)

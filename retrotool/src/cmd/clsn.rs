@@ -1,3 +1,5 @@
+#![allow(clippy::double_parens)]
+
 use std::{
     fs::File,
     io::{Cursor, Write},
@@ -52,6 +54,7 @@ pub struct Vertices {
 
 #[binrw]
 #[derive(Clone, Debug)]
+#[allow(unused)]
 pub struct Materials {
     pub count: u32,
     #[br(count = count)]
@@ -60,6 +63,7 @@ pub struct Materials {
 
 #[binrw]
 #[derive(Clone, Debug)]
+#[allow(unused)]
 pub struct CCollisionMaterial {
     orientation: u32,
     material_type: u32,
@@ -88,6 +92,7 @@ pub struct Triangles {
 
 #[binrw]
 #[derive(Clone, Debug)]
+#[allow(unused)]
 pub struct AABoxTreeNode {
     bounds: CAABox,
     start: u32,
@@ -100,6 +105,7 @@ pub struct AABoxTreeNode {
 
 #[binrw]
 #[derive(Clone, Debug)]
+#[allow(unused)]
 pub struct OBBoxTreeNode {
     bounds: COBBox,
     start: u32,
@@ -112,6 +118,7 @@ pub struct OBBoxTreeNode {
 
 #[binrw]
 #[derive(Clone, Debug)]
+#[allow(unused)]
 pub struct AABoxCollisionTree {
     count: u32,
     #[br(count = count)]
@@ -120,6 +127,7 @@ pub struct AABoxCollisionTree {
 
 #[binrw]
 #[derive(Clone, Debug)]
+#[allow(unused)]
 pub struct OBBoxCollisionTree {
     count: u32,
     #[br(count = count)]

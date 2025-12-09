@@ -605,7 +605,7 @@ fn parse_property_list<R: Read + Seek>(
             ),
             None => (None, None),
         };
-        let value = value.unwrap_or_else(|| ConstructedPropertyValue::Unknown(data));
+        let value = value.unwrap_or(ConstructedPropertyValue::Unknown(data));
         properties.push(ConstructedProperty { id, name, value });
     }
     Ok(ConstructedPropertyValue::PropertyList(Box::new(ConstructedPropertyList {

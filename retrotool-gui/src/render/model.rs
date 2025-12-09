@@ -87,7 +87,7 @@ pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<Built
 
     // Process meshes
     let mut out_meshes = vec![];
-    for (_idx, in_mesh) in mesh.meshes.iter().enumerate() {
+    for in_mesh in mesh.meshes.iter() {
         let (indices, vert_range) = match &index_buffers[in_mesh.idx_buf_idx as usize] {
             IndicesSlice::U16(indices) => {
                 let (values, range) =

@@ -52,9 +52,7 @@ impl UiTexture {
         images: &mut Assets<Image>,
         textures: &mut EguiUserTextures,
     ) -> Option<Self> {
-        let Some(image) = images.get(&handle) else {
-            return None;
-        };
+        let image = images.get(&handle)?;
         let width = image.texture_descriptor.size.width;
         let height = image.texture_descriptor.size.height;
         let weak_handle = handle.clone_weak();

@@ -25,6 +25,7 @@ pub struct OpenTab {
 pub struct TabState {
     pub open_assets: Vec<AssetRef>,
     pub open_tab: Option<OpenTab>,
+    #[allow(unused)]
     pub viewport: Viewport,
     pub render_layer: u8,
     pub close_all: Option<NodeIndex>,
@@ -49,6 +50,7 @@ pub trait EditorTab: Send + Sync {
 
     fn title(&self) -> egui::WidgetText;
 
+    #[allow(unused)]
     fn id(&self) -> String;
 
     fn clear_background(&self) -> bool { true }
