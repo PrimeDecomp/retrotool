@@ -45,6 +45,7 @@ pub struct AssetDirectoryEntry<O: ByteOrder> {
     pub offset: U64<O>,
     pub decompressed_size: U64<O>,
     pub size: U64<O>,
+    pub unk1: U64<O>,
 }
 
 /// PACK::TOCC::META chunk
@@ -145,7 +146,7 @@ where O: ByteOrderExt + 'static
         ensure!(pack.reader_version.get() == 1);
         let (tocc, tocc_data, _) = FormDescriptor::<O>::slice(pack_data)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.reader_version.get() == 3);
+        ensure!(tocc.reader_version.get() == 4);
 
         // Rewrite PACK with only TOCC chunk
         let mut out = Cursor::new(Vec::new());
@@ -164,7 +165,7 @@ where O: ByteOrderExt + 'static
         ensure!(pack.reader_version.get() == 1);
         let (tocc, mut tocc_data, _) = FormDescriptor::<O>::slice(pack_data)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.reader_version.get() == 3);
+        ensure!(tocc.reader_version.get() == 4);
         let mut adir: Option<&[AssetDirectoryEntry<O>]> = None;
         let mut strg: HashMap<Uuid, Vec<String>> = HashMap::new();
         while !tocc_data.is_empty() {
@@ -233,7 +234,7 @@ where O: ByteOrderExt + 'static
         ensure!(pack.reader_version.get() == 1);
         let (tocc, mut tocc_data, _) = FormDescriptor::<O>::slice(pack_data)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.reader_version.get() == 3);
+        ensure!(tocc.reader_version.get() == 4);
 
         let mut asset: Option<AssetDirectoryEntry<O>> = None;
         let mut meta: Option<&[u8]> = None;
@@ -297,7 +298,8 @@ where O: ByteOrderExt + 'static
         let compressed_data =
             &data[asset.offset.get() as usize..(asset.offset.get() + asset.size.get()) as usize];
         let (compression_mode, data) = if asset.size != asset.decompressed_size {
-            decompress_buffer(compressed_data, asset.decompressed_size.get())?
+            decompress_buffer(compressed_data, asset.decompressed_size.get())
+                .with_context(|| format!("Failed to decompress asset {}", id))?
         } else {
             (0, Cow::Borrowed(compressed_data))
         };
@@ -363,7 +365,7 @@ where O: ByteOrderExt + 'static
         log::debug!("PACK: {:?}", pack);
         let (tocc, mut tocc_data, _) = FormDescriptor::<O>::slice(pack_data)?;
         ensure!(tocc.id == K_FORM_TOCC);
-        ensure!(tocc.reader_version.get() == 3);
+        ensure!(tocc.reader_version.get() == 4);
         log::debug!("TOCC: {:?}", tocc);
         let mut adir: Option<&[AssetDirectoryEntry<O>]> = None;
         let mut meta: HashMap<Uuid, &[u8]> = HashMap::new();
@@ -428,7 +430,10 @@ where O: ByteOrderExt + 'static
             let compressed_data = &data[asset_entry.offset.get() as usize
                 ..(asset_entry.offset.get() + asset_entry.size.get()) as usize];
             let (compression_mode, data) = if asset_entry.size != asset_entry.decompressed_size {
-                decompress_buffer(compressed_data, asset_entry.decompressed_size.get())?
+                decompress_buffer(compressed_data, asset_entry.decompressed_size.get())
+                    .with_context(|| {
+                        format!("Failed to decompress asset {}", asset_entry.asset_id.get())
+                    })?
             } else {
                 (0, Cow::Borrowed(compressed_data))
             };
@@ -478,6 +483,7 @@ where O: ByteOrderExt + 'static
                 offset: U64::new(0),
                 decompressed_size: U64::new(asset.data.len() as u64),
                 size: U64::new(asset.data.len() as u64),
+                unk1: U64::new(0),
             });
             if asset.meta.is_some() {
                 metadata.entries.push(MetadataTableEntry { asset_id: asset.id, offset: 0 });

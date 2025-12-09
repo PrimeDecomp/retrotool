@@ -1,36 +1,421 @@
 /// https://wiki.axiodl.com/w/LZSS_Compression
-pub fn decompress<const M: u8>(mut input: &[u8], output: &mut [u8]) -> bool {
-    let group_len = 2usize.pow(M as u32 - 1);
-    let mut out_cur = 0usize;
+pub fn decompress<const M: u8>(input: &[u8], output: &mut [u8]) -> bool {
+    let group_size: usize = 1 << (M - 1);
 
-    let mut header_byte = 0u8;
-    let mut group = 0u8;
-    while !input.is_empty() {
-        if group == 0 {
-            header_byte = input[0];
-            input = &input[1..];
-            group = 8;
-        }
-
-        if header_byte & 0x80 == 0 {
-            output[out_cur..group_len + out_cur].copy_from_slice(&input[..group_len]);
-            input = &input[group_len..];
-            out_cur += group_len;
-        } else {
-            let count = (input[0] as usize >> 4) + (4 - M as usize);
-            let length = (((input[0] as usize & 0xF) << 0x8) | input[1] as usize) << (M - 1);
-            input = &input[2..];
-
-            let seek = out_cur - length;
-            for n in 0..count * group_len {
-                output[out_cur + n] = output[seek + n];
+    let mut state = DecompressionState::new(input);
+    let mut out_cur: usize = 0;
+    while out_cur < output.len() {
+        let Some(is_backref) = state.read_bit() else {
+            return false;
+        };
+        if is_backref {
+            // Back-reference: 2 bytes encode count and offset
+            let mut b = [0u8; 2];
+            if !state.read_bytes_direct(&mut b, 0, 2) {
+                return false;
             }
-            out_cur += count * group_len;
-        }
 
-        header_byte <<= 1;
-        group -= 1;
+            let count = (b[0] as usize >> 4) + (4 - M as usize);
+            let offset = (((b[0] as usize & 0xF) << 8) | b[1] as usize) << (M - 1);
+
+            let copy_len = count * group_size;
+            let src_start = out_cur - offset;
+            for i in 0..copy_len {
+                output[out_cur + i] = output[src_start + i];
+            }
+            out_cur += copy_len;
+        } else {
+            // Literal: copy unit_size bytes directly
+            if !state.read_bytes_direct(output, out_cur, group_size) {
+                return false;
+            }
+            out_cur += group_size;
+        }
     }
 
-    out_cur == output.len()
+    true
 }
+
+/// Decompresses Huffman-coded LZSS variants introduced in Metroid Prime 4.
+///
+/// M = 1: 0xC format (8-bit groups)
+/// M = 2: 0xD format (16-bit groups)
+/// M = 3: 0xE format (32-bit groups)
+///
+/// This format uses:
+/// - Flag bits indicating literal (0) or back-reference (1)
+/// - Huffman-coded length and offset values for back-references
+pub fn decompress_huffman<const M: u8>(input: &[u8], output: &mut [u8]) -> bool {
+    let group_size: usize = 1 << (M - 1);
+
+    let mut state = DecompressionState::new(input);
+    let mut out_cur: usize = 0;
+    while out_cur < output.len() {
+        let Some(is_backref) = state.read_bit() else {
+            return false;
+        };
+        if is_backref {
+            if !state.decode_backref::<M>(output, &mut out_cur) {
+                return false;
+            }
+        } else if state.bits_remaining != 0 {
+            // Literal with bitwise read
+            for i in 0..group_size {
+                let Some(b) = state.read_byte_bitwise() else {
+                    return false;
+                };
+                output[out_cur + i] = b;
+            }
+            out_cur += group_size;
+        } else {
+            // Byte-aligned literal read
+            if !state.read_bytes_direct(output, out_cur, group_size) {
+                return false;
+            }
+            out_cur += group_size;
+        }
+    }
+
+    true
+}
+
+struct DecompressionState<'a> {
+    input: &'a [u8],
+    flag_byte: u8,
+    bits_remaining: u32,
+}
+
+impl<'a> DecompressionState<'a> {
+    fn new(input: &'a [u8]) -> Self { Self { input, flag_byte: 0, bits_remaining: 0 } }
+
+    #[inline]
+    fn read_byte(&mut self) -> Option<u8> {
+        if self.input.len() > 0 {
+            let b = self.input[0];
+            self.input = &self.input[1..];
+            Some(b)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn read_bytes_direct(&mut self, output: &mut [u8], pos: usize, count: usize) -> bool {
+        if self.input.len() >= count {
+            output[pos..pos + count].copy_from_slice(&self.input[..count]);
+            self.input = &self.input[count..];
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    fn read_bit(&mut self) -> Option<bool> {
+        if self.bits_remaining == 0 {
+            self.flag_byte = self.read_byte()?;
+            self.bits_remaining = 7;
+        } else {
+            self.bits_remaining -= 1;
+        }
+        Some(((self.flag_byte >> self.bits_remaining) & 1) != 0)
+    }
+
+    /// Read a literal byte with bitwise extraction from the bitstream
+    fn read_byte_bitwise(&mut self) -> Option<u8> {
+        let next_byte = self.read_byte()?;
+        let bits_from_cur = 8 - self.bits_remaining;
+        let mask = !(0xffu8.wrapping_shl(bits_from_cur));
+        let result = (next_byte >> self.bits_remaining) & mask | (self.flag_byte << bits_from_cur);
+        self.flag_byte = next_byte;
+        Some(result)
+    }
+
+    fn decode_huffman(&mut self, table: &[HuffmanEntry; 256]) -> Option<u8> {
+        let mut idx: usize = 0;
+        let mut bits_read: u32 = 0;
+        let mut code_value: u32 = 0;
+
+        loop {
+            let entry = table[idx];
+            let target_bits = entry.bit_count as u32;
+            let bits_needed = target_bits as i32 - bits_read as i32;
+
+            if target_bits < bits_read || bits_needed == 0 {
+                if bits_needed == 0 {
+                    let next_idx = idx + entry.next_offset as usize;
+                    let threshold_entry = table[next_idx - 1];
+                    if code_value <= threshold_entry.threshold {
+                        let symbol_idx =
+                            code_value as usize + next_idx - 1 - threshold_entry.threshold as usize;
+                        break Some(table[symbol_idx].symbol);
+                    }
+                }
+            } else {
+                for _ in 0..bits_needed {
+                    let bit = self.read_bit()?;
+                    code_value = (code_value << 1) | (bit as u32);
+                }
+                bits_read = target_bits;
+
+                let next_idx = idx + entry.next_offset as usize;
+                let threshold_entry = table[next_idx - 1];
+                if code_value <= threshold_entry.threshold {
+                    let symbol_idx =
+                        code_value as usize + next_idx - 1 - threshold_entry.threshold as usize;
+                    break Some(table[symbol_idx].symbol);
+                }
+            }
+
+            if idx > 255 {
+                break None;
+            }
+            idx += entry.next_offset as usize;
+        }
+    }
+
+    /// Decode a back-reference for Huffman-coded LZSS formats
+    fn decode_backref<const M: u8>(&mut self, output: &mut [u8], out_cur: &mut usize) -> bool {
+        let Some(length_code) = self.decode_huffman(&HUFFMAN_LENGTH) else {
+            return false;
+        };
+        let Some(offset_lo) = self.decode_huffman(&HUFFMAN_OFFSET_LO) else {
+            return false;
+        };
+        let Some(offset_hi) = self.decode_huffman(&HUFFMAN_OFFSET_HI) else {
+            return false;
+        };
+        let dst_start = *out_cur;
+        let src_start =
+            *out_cur - (((offset_hi as usize) << (8 + M - 1)) | ((offset_lo as usize) << (M - 1)));
+        let copy_len = (length_code as usize + (4 - M as usize)) * (1 << (M - 1));
+        for i in 0..copy_len {
+            output[dst_start + i] = output[src_start + i];
+        }
+        *out_cur = dst_start + copy_len;
+        true
+    }
+}
+
+/// Table entry for Huffman-coded LZSS formats
+#[derive(Clone, Copy)]
+struct HuffmanEntry {
+    /// Cumulative bit count threshold
+    bit_count: u16,
+    /// Next index offset
+    next_offset: u8,
+    /// Decoded symbol
+    symbol: u8,
+    /// Code value comparison threshold
+    threshold: u32,
+}
+
+/// Shorthand constructor for HuffmanEntry
+#[allow(non_snake_case)]
+const fn H(bit_count: u16, next_offset: u8, symbol: u8, threshold: u32) -> HuffmanEntry {
+    HuffmanEntry { bit_count, next_offset, symbol, threshold }
+}
+
+#[rustfmt::skip]
+const HUFFMAN_LENGTH: [HuffmanEntry; 256] = [
+    H( 1,  1, 0x00, 0x00000000), H( 2,  1, 0x01, 0x00000002), H( 4,  1, 0x02, 0x0000000c), H( 5,  3, 0x03, 0x0000001a),
+    H( 5,  2, 0x04, 0x0000001b), H( 5,  1, 0x05, 0x0000001c), H( 6,  3, 0x06, 0x0000003a), H( 6,  2, 0x07, 0x0000003b),
+    H( 6,  1, 0x09, 0x0000003c), H( 7,  2, 0x08, 0x0000007a), H( 7,  1, 0xff, 0x0000007b), H( 8,  1, 0x0a, 0x000000f8),
+    H( 9,  5, 0x0b, 0x000001f2), H( 9,  4, 0x0c, 0x000001f3), H( 9,  3, 0x0d, 0x000001f4), H( 9,  2, 0x0e, 0x000001f5),
+    H( 9,  1, 0x0f, 0x000001f6), H(10,  3, 0x10, 0x000003ee), H(10,  2, 0x11, 0x000003ef), H(10,  1, 0x13, 0x000003f0),
+    H(11,  9, 0x12, 0x000007e2), H(11,  8, 0x14, 0x000007e3), H(11,  7, 0x15, 0x000007e4), H(11,  6, 0x16, 0x000007e5),
+    H(11,  5, 0x1e, 0x000007e6), H(11,  4, 0x1f, 0x000007e7), H(11,  3, 0x2f, 0x000007e8), H(11,  2, 0x3f, 0x000007e9),
+    H(11,  1, 0x47, 0x000007ea), H(12, 11, 0x17, 0x00000fd6), H(12, 10, 0x18, 0x00000fd7), H(12,  9, 0x19, 0x00000fd8),
+    H(12,  8, 0x1b, 0x00000fd9), H(12,  7, 0x20, 0x00000fda), H(12,  6, 0x21, 0x00000fdb), H(12,  5, 0x23, 0x00000fdc),
+    H(12,  4, 0x26, 0x00000fdd), H(12,  3, 0x27, 0x00000fde), H(12,  2, 0x33, 0x00000fdf), H(12,  1, 0x3e, 0x00000fe0),
+    H(13, 24, 0x1a, 0x00001fc2), H(13, 23, 0x1c, 0x00001fc3), H(13, 22, 0x1d, 0x00001fc4), H(13, 21, 0x22, 0x00001fc5),
+    H(13, 20, 0x24, 0x00001fc6), H(13, 19, 0x25, 0x00001fc7), H(13, 18, 0x28, 0x00001fc8), H(13, 17, 0x29, 0x00001fc9),
+    H(13, 16, 0x2b, 0x00001fca), H(13, 15, 0x2e, 0x00001fcb), H(13, 14, 0x30, 0x00001fcc), H(13, 13, 0x36, 0x00001fcd),
+    H(13, 12, 0x37, 0x00001fce), H(13, 11, 0x40, 0x00001fcf), H(13, 10, 0x41, 0x00001fd0), H(13,  9, 0x46, 0x00001fd1),
+    H(13,  8, 0x48, 0x00001fd2), H(13,  7, 0x5e, 0x00001fd3), H(13,  6, 0x5f, 0x00001fd4), H(13,  5, 0x67, 0x00001fd5),
+    H(13,  4, 0x7b, 0x00001fd6), H(13,  3, 0x7e, 0x00001fd7), H(13,  2, 0x7f, 0x00001fd8), H(13,  1, 0x83, 0x00001fd9),
+    H(14, 30, 0x2a, 0x00003fb4), H(14, 29, 0x2c, 0x00003fb5), H(14, 28, 0x2d, 0x00003fb6), H(14, 27, 0x31, 0x00003fb7),
+    H(14, 26, 0x32, 0x00003fb8), H(14, 25, 0x34, 0x00003fb9), H(14, 24, 0x35, 0x00003fba), H(14, 23, 0x38, 0x00003fbb),
+    H(14, 22, 0x39, 0x00003fbc), H(14, 21, 0x3b, 0x00003fbd), H(14, 20, 0x3d, 0x00003fbe), H(14, 19, 0x42, 0x00003fbf),
+    H(14, 18, 0x43, 0x00003fc0), H(14, 17, 0x45, 0x00003fc1), H(14, 16, 0x49, 0x00003fc2), H(14, 15, 0x4a, 0x00003fc3),
+    H(14, 14, 0x4e, 0x00003fc4), H(14, 13, 0x4f, 0x00003fc5), H(14, 12, 0x53, 0x00003fc6), H(14, 11, 0x56, 0x00003fc7),
+    H(14, 10, 0x57, 0x00003fc8), H(14,  9, 0x60, 0x00003fc9), H(14,  8, 0x61, 0x00003fca), H(14,  7, 0x66, 0x00003fcb),
+    H(14,  6, 0x6f, 0x00003fcc), H(14,  5, 0x8e, 0x00003fcd), H(14,  4, 0x8f, 0x00003fce), H(14,  3, 0x9f, 0x00003fcf),
+    H(14,  2, 0xc7, 0x00003fd0), H(14,  1, 0xf7, 0x00003fd1), H(15, 46, 0x3a, 0x00007fa4), H(15, 45, 0x3c, 0x00007fa5),
+    H(15, 44, 0x44, 0x00007fa6), H(15, 43, 0x4b, 0x00007fa7), H(15, 42, 0x4c, 0x00007fa8), H(15, 41, 0x4d, 0x00007fa9),
+    H(15, 40, 0x50, 0x00007faa), H(15, 39, 0x51, 0x00007fab), H(15, 38, 0x52, 0x00007fac), H(15, 37, 0x58, 0x00007fad),
+    H(15, 36, 0x5b, 0x00007fae), H(15, 35, 0x5d, 0x00007faf), H(15, 34, 0x62, 0x00007fb0), H(15, 33, 0x63, 0x00007fb1),
+    H(15, 32, 0x68, 0x00007fb2), H(15, 31, 0x69, 0x00007fb3), H(15, 30, 0x6a, 0x00007fb4), H(15, 29, 0x6b, 0x00007fb5),
+    H(15, 28, 0x6e, 0x00007fb6), H(15, 27, 0x76, 0x00007fb7), H(15, 26, 0x77, 0x00007fb8), H(15, 25, 0x7d, 0x00007fb9),
+    H(15, 24, 0x80, 0x00007fba), H(15, 23, 0x81, 0x00007fbb), H(15, 22, 0x82, 0x00007fbc), H(15, 21, 0x86, 0x00007fbd),
+    H(15, 20, 0x87, 0x00007fbe), H(15, 19, 0x90, 0x00007fbf), H(15, 18, 0x93, 0x00007fc0), H(15, 17, 0xa3, 0x00007fc1),
+    H(15, 16, 0xa5, 0x00007fc2), H(15, 15, 0xaf, 0x00007fc3), H(15, 14, 0xb0, 0x00007fc4), H(15, 13, 0xb3, 0x00007fc5),
+    H(15, 12, 0xb7, 0x00007fc6), H(15, 11, 0xb9, 0x00007fc7), H(15, 10, 0xbd, 0x00007fc8), H(15,  9, 0xbe, 0x00007fc9),
+    H(15,  8, 0xbf, 0x00007fca), H(15,  7, 0xef, 0x00007fcb), H(15,  6, 0xf3, 0x00007fcc), H(15,  5, 0xf6, 0x00007fcd),
+    H(15,  4, 0xf9, 0x00007fce), H(15,  3, 0xfb, 0x00007fcf), H(15,  2, 0xfc, 0x00007fd0), H(15,  1, 0xfd, 0x00007fd1),
+    H(16, 70, 0x54, 0x0000ffa4), H(16, 69, 0x55, 0x0000ffa5), H(16, 68, 0x59, 0x0000ffa6), H(16, 67, 0x5a, 0x0000ffa7),
+    H(16, 66, 0x5c, 0x0000ffa8), H(16, 65, 0x64, 0x0000ffa9), H(16, 64, 0x65, 0x0000ffaa), H(16, 63, 0x6c, 0x0000ffab),
+    H(16, 62, 0x6d, 0x0000ffac), H(16, 61, 0x70, 0x0000ffad), H(16, 60, 0x71, 0x0000ffae), H(16, 59, 0x73, 0x0000ffaf),
+    H(16, 58, 0x75, 0x0000ffb0), H(16, 57, 0x78, 0x0000ffb1), H(16, 56, 0x79, 0x0000ffb2), H(16, 55, 0x7a, 0x0000ffb3),
+    H(16, 54, 0x7c, 0x0000ffb4), H(16, 53, 0x84, 0x0000ffb5), H(16, 52, 0x85, 0x0000ffb6), H(16, 51, 0x88, 0x0000ffb7),
+    H(16, 50, 0x89, 0x0000ffb8), H(16, 49, 0x8b, 0x0000ffb9), H(16, 48, 0x8d, 0x0000ffba), H(16, 47, 0x91, 0x0000ffbb),
+    H(16, 46, 0x92, 0x0000ffbc), H(16, 45, 0x94, 0x0000ffbd), H(16, 44, 0x95, 0x0000ffbe), H(16, 43, 0x96, 0x0000ffbf),
+    H(16, 42, 0x97, 0x0000ffc0), H(16, 41, 0x9b, 0x0000ffc1), H(16, 40, 0x9e, 0x0000ffc2), H(16, 39, 0xa0, 0x0000ffc3),
+    H(16, 38, 0xa4, 0x0000ffc4), H(16, 37, 0xa6, 0x0000ffc5), H(16, 36, 0xa7, 0x0000ffc6), H(16, 35, 0xab, 0x0000ffc7),
+    H(16, 34, 0xac, 0x0000ffc8), H(16, 33, 0xad, 0x0000ffc9), H(16, 32, 0xae, 0x0000ffca), H(16, 31, 0xb1, 0x0000ffcb),
+    H(16, 30, 0xb4, 0x0000ffcc), H(16, 29, 0xb5, 0x0000ffcd), H(16, 28, 0xb6, 0x0000ffce), H(16, 27, 0xb8, 0x0000ffcf),
+    H(16, 26, 0xba, 0x0000ffd0), H(16, 25, 0xbb, 0x0000ffd1), H(16, 24, 0xc3, 0x0000ffd2), H(16, 23, 0xc6, 0x0000ffd3),
+    H(16, 22, 0xc9, 0x0000ffd4), H(16, 21, 0xcb, 0x0000ffd5), H(16, 20, 0xce, 0x0000ffd6), H(16, 19, 0xcf, 0x0000ffd7),
+    H(16, 18, 0xd3, 0x0000ffd8), H(16, 17, 0xd7, 0x0000ffd9), H(16, 16, 0xdb, 0x0000ffda), H(16, 15, 0xde, 0x0000ffdb),
+    H(16, 14, 0xdf, 0x0000ffdc), H(16, 13, 0xe3, 0x0000ffdd), H(16, 12, 0xe5, 0x0000ffde), H(16, 11, 0xe6, 0x0000ffdf),
+    H(16, 10, 0xe7, 0x0000ffe0), H(16,  9, 0xeb, 0x0000ffe1), H(16,  8, 0xee, 0x0000ffe2), H(16,  7, 0xf0, 0x0000ffe3),
+    H(16,  6, 0xf1, 0x0000ffe4), H(16,  5, 0xf4, 0x0000ffe5), H(16,  4, 0xf5, 0x0000ffe6), H(16,  3, 0xf8, 0x0000ffe7),
+    H(16,  2, 0xfa, 0x0000ffe8), H(16,  1, 0xfe, 0x0000ffe9), H(17, 42, 0x72, 0x0001ffd4), H(17, 41, 0x74, 0x0001ffd5),
+    H(17, 40, 0x8a, 0x0001ffd6), H(17, 39, 0x8c, 0x0001ffd7), H(17, 38, 0x98, 0x0001ffd8), H(17, 37, 0x99, 0x0001ffd9),
+    H(17, 36, 0x9a, 0x0001ffda), H(17, 35, 0x9c, 0x0001ffdb), H(17, 34, 0x9d, 0x0001ffdc), H(17, 33, 0xa1, 0x0001ffdd),
+    H(17, 32, 0xa2, 0x0001ffde), H(17, 31, 0xa8, 0x0001ffdf), H(17, 30, 0xa9, 0x0001ffe0), H(17, 29, 0xaa, 0x0001ffe1),
+    H(17, 28, 0xb2, 0x0001ffe2), H(17, 27, 0xbc, 0x0001ffe3), H(17, 26, 0xc0, 0x0001ffe4), H(17, 25, 0xc1, 0x0001ffe5),
+    H(17, 24, 0xc2, 0x0001ffe6), H(17, 23, 0xc4, 0x0001ffe7), H(17, 22, 0xc5, 0x0001ffe8), H(17, 21, 0xc8, 0x0001ffe9),
+    H(17, 20, 0xca, 0x0001ffea), H(17, 19, 0xcc, 0x0001ffeb), H(17, 18, 0xcd, 0x0001ffec), H(17, 17, 0xd0, 0x0001ffed),
+    H(17, 16, 0xd1, 0x0001ffee), H(17, 15, 0xd2, 0x0001ffef), H(17, 14, 0xd4, 0x0001fff0), H(17, 13, 0xd5, 0x0001fff1),
+    H(17, 12, 0xd6, 0x0001fff2), H(17, 11, 0xd8, 0x0001fff3), H(17, 10, 0xdc, 0x0001fff4), H(17,  9, 0xdd, 0x0001fff5),
+    H(17,  8, 0xe0, 0x0001fff6), H(17,  7, 0xe1, 0x0001fff7), H(17,  6, 0xe4, 0x0001fff8), H(17,  5, 0xe8, 0x0001fff9),
+    H(17,  4, 0xe9, 0x0001fffa), H(17,  3, 0xec, 0x0001fffb), H(17,  2, 0xed, 0x0001fffc), H(17,  1, 0xf2, 0x0001fffd),
+    H(18,  4, 0xd9, 0x0003fffc), H(18,  3, 0xda, 0x0003fffd), H(18,  2, 0xe2, 0x0003fffe), H(18,  1, 0xea, 0x0003ffff),
+];
+
+#[rustfmt::skip]
+const HUFFMAN_OFFSET_LO: [HuffmanEntry; 256] = [
+    H( 5,  5, 0x00, 0x00000000), H( 5,  4, 0x08, 0x00000001), H( 5,  3, 0x10, 0x00000002), H( 5,  2, 0x18, 0x00000003),
+    H( 5,  1, 0x20, 0x00000004), H( 6, 31, 0x04, 0x0000000a), H( 6, 30, 0x0c, 0x0000000b), H( 6, 29, 0x12, 0x0000000c),
+    H( 6, 28, 0x24, 0x0000000d), H( 6, 27, 0x28, 0x0000000e), H( 6, 26, 0x30, 0x0000000f), H( 6, 25, 0x38, 0x00000010),
+    H( 6, 24, 0x40, 0x00000011), H( 6, 23, 0x48, 0x00000012), H( 6, 22, 0x50, 0x00000013), H( 6, 21, 0x58, 0x00000014),
+    H( 6, 20, 0x60, 0x00000015), H( 6, 19, 0x68, 0x00000016), H( 6, 18, 0x70, 0x00000017), H( 6, 17, 0x78, 0x00000018),
+    H( 6, 16, 0x80, 0x00000019), H( 6, 15, 0x88, 0x0000001a), H( 6, 14, 0x90, 0x0000001b), H( 6, 13, 0x98, 0x0000001c),
+    H( 6, 12, 0xa0, 0x0000001d), H( 6, 11, 0xa8, 0x0000001e), H( 6, 10, 0xb0, 0x0000001f), H( 6,  9, 0xb8, 0x00000020),
+    H( 6,  8, 0xc0, 0x00000021), H( 6,  7, 0xc8, 0x00000022), H( 6,  6, 0xd0, 0x00000023), H( 6,  5, 0xd8, 0x00000024),
+    H( 6,  4, 0xe0, 0x00000025), H( 6,  3, 0xe8, 0x00000026), H( 6,  2, 0xf0, 0x00000027), H( 6,  1, 0xf8, 0x00000028),
+    H( 7, 27, 0x01, 0x00000052), H( 7, 26, 0x14, 0x00000053), H( 7, 25, 0x1c, 0x00000054), H( 7, 24, 0x2c, 0x00000055),
+    H( 7, 23, 0x34, 0x00000056), H( 7, 22, 0x3c, 0x00000057), H( 7, 21, 0x44, 0x00000058), H( 7, 20, 0x4c, 0x00000059),
+    H( 7, 19, 0x54, 0x0000005a), H( 7, 18, 0x5c, 0x0000005b), H( 7, 17, 0x64, 0x0000005c), H( 7, 16, 0x6c, 0x0000005d),
+    H( 7, 15, 0x74, 0x0000005e), H( 7, 14, 0x7c, 0x0000005f), H( 7, 13, 0x84, 0x00000060), H( 7, 12, 0x8c, 0x00000061),
+    H( 7, 11, 0x9c, 0x00000062), H( 7, 10, 0xa4, 0x00000063), H( 7,  9, 0xac, 0x00000064), H( 7,  8, 0xb4, 0x00000065),
+    H( 7,  7, 0xbc, 0x00000066), H( 7,  6, 0xc4, 0x00000067), H( 7,  5, 0xcc, 0x00000068), H( 7,  4, 0xd4, 0x00000069),
+    H( 7,  3, 0xe4, 0x0000006a), H( 7,  2, 0xf4, 0x0000006b), H( 7,  1, 0xfc, 0x0000006c), H( 8,  7, 0x02, 0x000000da),
+    H( 8,  6, 0x06, 0x000000db), H( 8,  5, 0x0e, 0x000000dc), H( 8,  4, 0x36, 0x000000dd), H( 8,  3, 0x94, 0x000000de),
+    H( 8,  2, 0xdc, 0x000000df), H( 8,  1, 0xec, 0x000000e0), H( 9, 11, 0x03, 0x000001c2), H( 9, 10, 0x09, 0x000001c3),
+    H( 9,  9, 0x0a, 0x000001c4), H( 9,  8, 0x16, 0x000001c5), H( 9,  7, 0x1e, 0x000001c6), H( 9,  6, 0x2a, 0x000001c7),
+    H( 9,  5, 0x42, 0x000001c8), H( 9,  4, 0x5a, 0x000001c9), H( 9,  3, 0x7e, 0x000001ca), H( 9,  2, 0xa2, 0x000001cb),
+    H( 9,  1, 0xc6, 0x000001cc), H(10, 56, 0x05, 0x0000039a), H(10, 55, 0x07, 0x0000039b), H(10, 54, 0x0b, 0x0000039c),
+    H(10, 53, 0x0f, 0x0000039d), H(10, 52, 0x17, 0x0000039e), H(10, 51, 0x1a, 0x0000039f), H(10, 50, 0x22, 0x000003a0),
+    H(10, 49, 0x26, 0x000003a1), H(10, 48, 0x2e, 0x000003a2), H(10, 47, 0x32, 0x000003a3), H(10, 46, 0x3a, 0x000003a4),
+    H(10, 45, 0x3e, 0x000003a5), H(10, 44, 0x46, 0x000003a6), H(10, 43, 0x4a, 0x000003a7), H(10, 42, 0x4e, 0x000003a8),
+    H(10, 41, 0x52, 0x000003a9), H(10, 40, 0x56, 0x000003aa), H(10, 39, 0x5e, 0x000003ab), H(10, 38, 0x62, 0x000003ac),
+    H(10, 37, 0x66, 0x000003ad), H(10, 36, 0x6a, 0x000003ae), H(10, 35, 0x6e, 0x000003af), H(10, 34, 0x72, 0x000003b0),
+    H(10, 33, 0x76, 0x000003b1), H(10, 32, 0x7a, 0x000003b2), H(10, 31, 0x82, 0x000003b3), H(10, 30, 0x86, 0x000003b4),
+    H(10, 29, 0x8a, 0x000003b5), H(10, 28, 0x8e, 0x000003b6), H(10, 27, 0x92, 0x000003b7), H(10, 26, 0x96, 0x000003b8),
+    H(10, 25, 0x9a, 0x000003b9), H(10, 24, 0x9e, 0x000003ba), H(10, 23, 0xa6, 0x000003bb), H(10, 22, 0xaa, 0x000003bc),
+    H(10, 21, 0xae, 0x000003bd), H(10, 20, 0xb2, 0x000003be), H(10, 19, 0xb6, 0x000003bf), H(10, 18, 0xba, 0x000003c0),
+    H(10, 17, 0xbe, 0x000003c1), H(10, 16, 0xc2, 0x000003c2), H(10, 15, 0xca, 0x000003c3), H(10, 14, 0xce, 0x000003c4),
+    H(10, 13, 0xd2, 0x000003c5), H(10, 12, 0xd6, 0x000003c6), H(10, 11, 0xda, 0x000003c7), H(10, 10, 0xde, 0x000003c8),
+    H(10,  9, 0xe2, 0x000003c9), H(10,  8, 0xe6, 0x000003ca), H(10,  7, 0xea, 0x000003cb), H(10,  6, 0xee, 0x000003cc),
+    H(10,  5, 0xf2, 0x000003cd), H(10,  4, 0xf6, 0x000003ce), H(10,  3, 0xfa, 0x000003cf), H(10,  2, 0xfe, 0x000003d0),
+    H(10,  1, 0xff, 0x000003d1), H(11, 65, 0x0d, 0x000007a4), H(11, 64, 0x11, 0x000007a5), H(11, 63, 0x15, 0x000007a6),
+    H(11, 62, 0x19, 0x000007a7), H(11, 61, 0x1b, 0x000007a8), H(11, 60, 0x1f, 0x000007a9), H(11, 59, 0x21, 0x000007aa),
+    H(11, 58, 0x27, 0x000007ab), H(11, 57, 0x29, 0x000007ac), H(11, 56, 0x2d, 0x000007ad), H(11, 55, 0x2f, 0x000007ae),
+    H(11, 54, 0x31, 0x000007af), H(11, 53, 0x37, 0x000007b0), H(11, 52, 0x39, 0x000007b1), H(11, 51, 0x3f, 0x000007b2),
+    H(11, 50, 0x41, 0x000007b3), H(11, 49, 0x45, 0x000007b4), H(11, 48, 0x47, 0x000007b5), H(11, 47, 0x49, 0x000007b6),
+    H(11, 46, 0x4f, 0x000007b7), H(11, 45, 0x51, 0x000007b8), H(11, 44, 0x57, 0x000007b9), H(11, 43, 0x59, 0x000007ba),
+    H(11, 42, 0x5f, 0x000007bb), H(11, 41, 0x61, 0x000007bc), H(11, 40, 0x67, 0x000007bd), H(11, 39, 0x69, 0x000007be),
+    H(11, 38, 0x6b, 0x000007bf), H(11, 37, 0x6d, 0x000007c0), H(11, 36, 0x6f, 0x000007c1), H(11, 35, 0x71, 0x000007c2),
+    H(11, 34, 0x77, 0x000007c3), H(11, 33, 0x79, 0x000007c4), H(11, 32, 0x7f, 0x000007c5), H(11, 31, 0x81, 0x000007c6),
+    H(11, 30, 0x87, 0x000007c7), H(11, 29, 0x89, 0x000007c8), H(11, 28, 0x8f, 0x000007c9), H(11, 27, 0x91, 0x000007ca),
+    H(11, 26, 0x97, 0x000007cb), H(11, 25, 0x99, 0x000007cc), H(11, 24, 0x9f, 0x000007cd), H(11, 23, 0xa1, 0x000007ce),
+    H(11, 22, 0xa7, 0x000007cf), H(11, 21, 0xa9, 0x000007d0), H(11, 20, 0xaf, 0x000007d1), H(11, 19, 0xb1, 0x000007d2),
+    H(11, 18, 0xb7, 0x000007d3), H(11, 17, 0xb9, 0x000007d4), H(11, 16, 0xbf, 0x000007d5), H(11, 15, 0xc1, 0x000007d6),
+    H(11, 14, 0xc7, 0x000007d7), H(11, 13, 0xc9, 0x000007d8), H(11, 12, 0xcf, 0x000007d9), H(11, 11, 0xd1, 0x000007da),
+    H(11, 10, 0xd7, 0x000007db), H(11,  9, 0xd9, 0x000007dc), H(11,  8, 0xdf, 0x000007dd), H(11,  7, 0xe1, 0x000007de),
+    H(11,  6, 0xe7, 0x000007df), H(11,  5, 0xe9, 0x000007e0), H(11,  4, 0xef, 0x000007e1), H(11,  3, 0xf1, 0x000007e2),
+    H(11,  2, 0xf7, 0x000007e3), H(11,  1, 0xf9, 0x000007e4), H(12, 54, 0x13, 0x00000fca), H(12, 53, 0x1d, 0x00000fcb),
+    H(12, 52, 0x23, 0x00000fcc), H(12, 51, 0x25, 0x00000fcd), H(12, 50, 0x2b, 0x00000fce), H(12, 49, 0x33, 0x00000fcf),
+    H(12, 48, 0x35, 0x00000fd0), H(12, 47, 0x3b, 0x00000fd1), H(12, 46, 0x3d, 0x00000fd2), H(12, 45, 0x43, 0x00000fd3),
+    H(12, 44, 0x4b, 0x00000fd4), H(12, 43, 0x4d, 0x00000fd5), H(12, 42, 0x53, 0x00000fd6), H(12, 41, 0x55, 0x00000fd7),
+    H(12, 40, 0x5b, 0x00000fd8), H(12, 39, 0x5d, 0x00000fd9), H(12, 38, 0x63, 0x00000fda), H(12, 37, 0x65, 0x00000fdb),
+    H(12, 36, 0x73, 0x00000fdc), H(12, 35, 0x75, 0x00000fdd), H(12, 34, 0x7b, 0x00000fde), H(12, 33, 0x7d, 0x00000fdf),
+    H(12, 32, 0x83, 0x00000fe0), H(12, 31, 0x85, 0x00000fe1), H(12, 30, 0x8b, 0x00000fe2), H(12, 29, 0x8d, 0x00000fe3),
+    H(12, 28, 0x93, 0x00000fe4), H(12, 27, 0x95, 0x00000fe5), H(12, 26, 0x9b, 0x00000fe6), H(12, 25, 0x9d, 0x00000fe7),
+    H(12, 24, 0xa3, 0x00000fe8), H(12, 23, 0xa5, 0x00000fe9), H(12, 22, 0xab, 0x00000fea), H(12, 21, 0xad, 0x00000feb),
+    H(12, 20, 0xb3, 0x00000fec), H(12, 19, 0xb5, 0x00000fed), H(12, 18, 0xbb, 0x00000fee), H(12, 17, 0xbd, 0x00000fef),
+    H(12, 16, 0xc3, 0x00000ff0), H(12, 15, 0xc5, 0x00000ff1), H(12, 14, 0xcb, 0x00000ff2), H(12, 13, 0xcd, 0x00000ff3),
+    H(12, 12, 0xd3, 0x00000ff4), H(12, 11, 0xd5, 0x00000ff5), H(12, 10, 0xdb, 0x00000ff6), H(12,  9, 0xdd, 0x00000ff7),
+    H(12,  8, 0xe3, 0x00000ff8), H(12,  7, 0xe5, 0x00000ff9), H(12,  6, 0xeb, 0x00000ffa), H(12,  5, 0xed, 0x00000ffb),
+    H(12,  4, 0xf3, 0x00000ffc), H(12,  3, 0xf5, 0x00000ffd), H(12,  2, 0xfb, 0x00000ffe), H(12,  1, 0xfd, 0x00000fff),
+];
+
+#[rustfmt::skip]
+const HUFFMAN_OFFSET_HI: [HuffmanEntry; 256] = [
+    H( 2,  1, 0x00, 0x00000000), H( 5,  3, 0x01, 0x00000008), H( 5,  2, 0x02, 0x00000009), H( 5,  1, 0x07, 0x0000000a),
+    H( 6,  8, 0x03, 0x00000016), H( 6,  7, 0x04, 0x00000017), H( 6,  6, 0x05, 0x00000018), H( 6,  5, 0x06, 0x00000019),
+    H( 6,  4, 0x08, 0x0000001a), H( 6,  3, 0x0e, 0x0000001b), H( 6,  2, 0x0f, 0x0000001c), H( 6,  1, 0x10, 0x0000001d),
+    H( 7, 16, 0x09, 0x0000003c), H( 7, 15, 0x0a, 0x0000003d), H( 7, 14, 0x0b, 0x0000003e), H( 7, 13, 0x0c, 0x0000003f),
+    H( 7, 12, 0x0d, 0x00000040), H( 7, 11, 0x11, 0x00000041), H( 7, 10, 0x12, 0x00000042), H( 7,  9, 0x13, 0x00000043),
+    H( 7,  8, 0x14, 0x00000044), H( 7,  7, 0x17, 0x00000045), H( 7,  6, 0x18, 0x00000046), H( 7,  5, 0x1c, 0x00000047),
+    H( 7,  4, 0x1e, 0x00000048), H( 7,  3, 0x1f, 0x00000049), H( 7,  2, 0x20, 0x0000004a), H( 7,  1, 0x30, 0x0000004b),
+    H( 8, 38, 0x15, 0x00000098), H( 8, 37, 0x16, 0x00000099), H( 8, 36, 0x19, 0x0000009a), H( 8, 35, 0x1a, 0x0000009b),
+    H( 8, 34, 0x1b, 0x0000009c), H( 8, 33, 0x1d, 0x0000009d), H( 8, 32, 0x21, 0x0000009e), H( 8, 31, 0x22, 0x0000009f),
+    H( 8, 30, 0x23, 0x000000a0), H( 8, 29, 0x24, 0x000000a1), H( 8, 28, 0x25, 0x000000a2), H( 8, 27, 0x26, 0x000000a3),
+    H( 8, 26, 0x27, 0x000000a4), H( 8, 25, 0x28, 0x000000a5), H( 8, 24, 0x29, 0x000000a6), H( 8, 23, 0x2a, 0x000000a7),
+    H( 8, 22, 0x2b, 0x000000a8), H( 8, 21, 0x2c, 0x000000a9), H( 8, 20, 0x2d, 0x000000aa), H( 8, 19, 0x2e, 0x000000ab),
+    H( 8, 18, 0x2f, 0x000000ac), H( 8, 17, 0x31, 0x000000ad), H( 8, 16, 0x32, 0x000000ae), H( 8, 15, 0x33, 0x000000af),
+    H( 8, 14, 0x35, 0x000000b0), H( 8, 13, 0x36, 0x000000b1), H( 8, 12, 0x37, 0x000000b2), H( 8, 11, 0x38, 0x000000b3),
+    H( 8, 10, 0x3e, 0x000000b4), H( 8,  9, 0x3f, 0x000000b5), H( 8,  8, 0x40, 0x000000b6), H( 8,  7, 0x41, 0x000000b7),
+    H( 8,  6, 0x4f, 0x000000b8), H( 8,  5, 0x50, 0x000000b9), H( 8,  4, 0x58, 0x000000ba), H( 8,  3, 0x5f, 0x000000bb),
+    H( 8,  2, 0x60, 0x000000bc), H( 8,  1, 0xb0, 0x000000bd), H( 9, 74, 0x34, 0x0000017c), H( 9, 73, 0x39, 0x0000017d),
+    H( 9, 72, 0x3a, 0x0000017e), H( 9, 71, 0x3b, 0x0000017f), H( 9, 70, 0x3c, 0x00000180), H( 9, 69, 0x3d, 0x00000181),
+    H( 9, 68, 0x42, 0x00000182), H( 9, 67, 0x43, 0x00000183), H( 9, 66, 0x44, 0x00000184), H( 9, 65, 0x45, 0x00000185),
+    H( 9, 64, 0x46, 0x00000186), H( 9, 63, 0x47, 0x00000187), H( 9, 62, 0x48, 0x00000188), H( 9, 61, 0x49, 0x00000189),
+    H( 9, 60, 0x4a, 0x0000018a), H( 9, 59, 0x4b, 0x0000018b), H( 9, 58, 0x4c, 0x0000018c), H( 9, 57, 0x4d, 0x0000018d),
+    H( 9, 56, 0x4e, 0x0000018e), H( 9, 55, 0x51, 0x0000018f), H( 9, 54, 0x52, 0x00000190), H( 9, 53, 0x53, 0x00000191),
+    H( 9, 52, 0x54, 0x00000192), H( 9, 51, 0x55, 0x00000193), H( 9, 50, 0x56, 0x00000194), H( 9, 49, 0x57, 0x00000195),
+    H( 9, 48, 0x59, 0x00000196), H( 9, 47, 0x5a, 0x00000197), H( 9, 46, 0x5b, 0x00000198), H( 9, 45, 0x5c, 0x00000199),
+    H( 9, 44, 0x5d, 0x0000019a), H( 9, 43, 0x5e, 0x0000019b), H( 9, 42, 0x61, 0x0000019c), H( 9, 41, 0x62, 0x0000019d),
+    H( 9, 40, 0x63, 0x0000019e), H( 9, 39, 0x64, 0x0000019f), H( 9, 38, 0x65, 0x000001a0), H( 9, 37, 0x66, 0x000001a1),
+    H( 9, 36, 0x67, 0x000001a2), H( 9, 35, 0x68, 0x000001a3), H( 9, 34, 0x69, 0x000001a4), H( 9, 33, 0x6a, 0x000001a5),
+    H( 9, 32, 0x6b, 0x000001a6), H( 9, 31, 0x6c, 0x000001a7), H( 9, 30, 0x6d, 0x000001a8), H( 9, 29, 0x6e, 0x000001a9),
+    H( 9, 28, 0x6f, 0x000001aa), H( 9, 27, 0x70, 0x000001ab), H( 9, 26, 0x71, 0x000001ac), H( 9, 25, 0x72, 0x000001ad),
+    H( 9, 24, 0x73, 0x000001ae), H( 9, 23, 0x74, 0x000001af), H( 9, 22, 0x76, 0x000001b0), H( 9, 21, 0x77, 0x000001b1),
+    H( 9, 20, 0x78, 0x000001b2), H( 9, 19, 0x79, 0x000001b3), H( 9, 18, 0x7d, 0x000001b4), H( 9, 17, 0x7e, 0x000001b5),
+    H( 9, 16, 0x7f, 0x000001b6), H( 9, 15, 0x80, 0x000001b7), H( 9, 14, 0x81, 0x000001b8), H( 9, 13, 0x82, 0x000001b9),
+    H( 9, 12, 0x86, 0x000001ba), H( 9, 11, 0x87, 0x000001bb), H( 9, 10, 0x88, 0x000001bc), H( 9,  9, 0x89, 0x000001bd),
+    H( 9,  8, 0x8f, 0x000001be), H( 9,  7, 0x90, 0x000001bf), H( 9,  6, 0x9f, 0x000001c0), H( 9,  5, 0xa0, 0x000001c1),
+    H( 9,  4, 0xa8, 0x000001c2), H( 9,  3, 0xaf, 0x000001c3), H( 9,  2, 0xb1, 0x000001c4), H( 9,  1, 0xc0, 0x000001c5),
+    H(10,116, 0x75, 0x0000038c), H(10,115, 0x7a, 0x0000038d), H(10,114, 0x7b, 0x0000038e), H(10,113, 0x7c, 0x0000038f),
+    H(10,112, 0x83, 0x00000390), H(10,111, 0x84, 0x00000391), H(10,110, 0x85, 0x00000392), H(10,109, 0x8a, 0x00000393),
+    H(10,108, 0x8b, 0x00000394), H(10,107, 0x8c, 0x00000395), H(10,106, 0x8d, 0x00000396), H(10,105, 0x8e, 0x00000397),
+    H(10,104, 0x91, 0x00000398), H(10,103, 0x92, 0x00000399), H(10,102, 0x93, 0x0000039a), H(10,101, 0x94, 0x0000039b),
+    H(10,100, 0x95, 0x0000039c), H(10, 99, 0x96, 0x0000039d), H(10, 98, 0x97, 0x0000039e), H(10, 97, 0x98, 0x0000039f),
+    H(10, 96, 0x99, 0x000003a0), H(10, 95, 0x9a, 0x000003a1), H(10, 94, 0x9b, 0x000003a2), H(10, 93, 0x9c, 0x000003a3),
+    H(10, 92, 0x9d, 0x000003a4), H(10, 91, 0x9e, 0x000003a5), H(10, 90, 0xa1, 0x000003a6), H(10, 89, 0xa2, 0x000003a7),
+    H(10, 88, 0xa3, 0x000003a8), H(10, 87, 0xa4, 0x000003a9), H(10, 86, 0xa5, 0x000003aa), H(10, 85, 0xa6, 0x000003ab),
+    H(10, 84, 0xa7, 0x000003ac), H(10, 83, 0xa9, 0x000003ad), H(10, 82, 0xaa, 0x000003ae), H(10, 81, 0xab, 0x000003af),
+    H(10, 80, 0xac, 0x000003b0), H(10, 79, 0xad, 0x000003b1), H(10, 78, 0xae, 0x000003b2), H(10, 77, 0xb2, 0x000003b3),
+    H(10, 76, 0xb3, 0x000003b4), H(10, 75, 0xb4, 0x000003b5), H(10, 74, 0xb5, 0x000003b6), H(10, 73, 0xb6, 0x000003b7),
+    H(10, 72, 0xb7, 0x000003b8), H(10, 71, 0xb8, 0x000003b9), H(10, 70, 0xb9, 0x000003ba), H(10, 69, 0xba, 0x000003bb),
+    H(10, 68, 0xbb, 0x000003bc), H(10, 67, 0xbc, 0x000003bd), H(10, 66, 0xbd, 0x000003be), H(10, 65, 0xbe, 0x000003bf),
+    H(10, 64, 0xbf, 0x000003c0), H(10, 63, 0xc1, 0x000003c1), H(10, 62, 0xc2, 0x000003c2), H(10, 61, 0xc3, 0x000003c3),
+    H(10, 60, 0xc4, 0x000003c4), H(10, 59, 0xc5, 0x000003c5), H(10, 58, 0xc6, 0x000003c6), H(10, 57, 0xc7, 0x000003c7),
+    H(10, 56, 0xc8, 0x000003c8), H(10, 55, 0xc9, 0x000003c9), H(10, 54, 0xca, 0x000003ca), H(10, 53, 0xcb, 0x000003cb),
+    H(10, 52, 0xcc, 0x000003cc), H(10, 51, 0xcd, 0x000003cd), H(10, 50, 0xce, 0x000003ce), H(10, 49, 0xcf, 0x000003cf),
+    H(10, 48, 0xd0, 0x000003d0), H(10, 47, 0xd1, 0x000003d1), H(10, 46, 0xd2, 0x000003d2), H(10, 45, 0xd3, 0x000003d3),
+    H(10, 44, 0xd4, 0x000003d4), H(10, 43, 0xd5, 0x000003d5), H(10, 42, 0xd6, 0x000003d6), H(10, 41, 0xd7, 0x000003d7),
+    H(10, 40, 0xd8, 0x000003d8), H(10, 39, 0xd9, 0x000003d9), H(10, 38, 0xda, 0x000003da), H(10, 37, 0xdb, 0x000003db),
+    H(10, 36, 0xdc, 0x000003dc), H(10, 35, 0xdd, 0x000003dd), H(10, 34, 0xde, 0x000003de), H(10, 33, 0xdf, 0x000003df),
+    H(10, 32, 0xe0, 0x000003e0), H(10, 31, 0xe1, 0x000003e1), H(10, 30, 0xe2, 0x000003e2), H(10, 29, 0xe3, 0x000003e3),
+    H(10, 28, 0xe4, 0x000003e4), H(10, 27, 0xe5, 0x000003e5), H(10, 26, 0xe6, 0x000003e6), H(10, 25, 0xe7, 0x000003e7),
+    H(10, 24, 0xe8, 0x000003e8), H(10, 23, 0xe9, 0x000003e9), H(10, 22, 0xea, 0x000003ea), H(10, 21, 0xeb, 0x000003eb),
+    H(10, 20, 0xec, 0x000003ec), H(10, 19, 0xed, 0x000003ed), H(10, 18, 0xee, 0x000003ee), H(10, 17, 0xef, 0x000003ef),
+    H(10, 16, 0xf0, 0x000003f0), H(10, 15, 0xf1, 0x000003f1), H(10, 14, 0xf2, 0x000003f2), H(10, 13, 0xf3, 0x000003f3),
+    H(10, 12, 0xf4, 0x000003f4), H(10, 11, 0xf5, 0x000003f5), H(10, 10, 0xf6, 0x000003f6), H(10,  9, 0xf7, 0x000003f7),
+    H(10,  8, 0xf8, 0x000003f8), H(10,  7, 0xf9, 0x000003f9), H(10,  6, 0xfa, 0x000003fa), H(10,  5, 0xfb, 0x000003fb),
+    H(10,  4, 0xfc, 0x000003fc), H(10,  3, 0xfd, 0x000003fd), H(10,  2, 0xfe, 0x000003fe), H(10,  1, 0xff, 0x000003ff),
+];
