@@ -21,7 +21,7 @@ jobs:
       RUSTFLAGS: -D warnings
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
       - name: Install dependencies
         run: |
           sudo apt-get -y update
@@ -48,8 +48,8 @@ jobs:
     # Prevent new advisories from failing CI
     continue-on-error: ${{ matrix.checks == 'advisories' }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: EmbarkStudios/cargo-deny-action@v1
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check ${{ matrix.checks }}
 
@@ -62,7 +62,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
       - name: Install dependencies
         if: matrix.platform == 'ubuntu-latest'
         run: |
@@ -117,7 +117,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
       - name: Install cargo-zigbuild
         if: matrix.build == 'zigbuild'
         run: pip install cargo-zigbuild
@@ -131,7 +131,7 @@ jobs:
       - name: Cargo build
         run: cargo ${{ matrix.build }} --release --target ${{ matrix.target }} --bin ${{ env.CARGO_BIN_NAME }}
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ env.CARGO_BIN_NAME }}-${{ matrix.name }}
           path: |
@@ -170,7 +170,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
       - name: Install dependencies
         if: matrix.platform == 'ubuntu-latest'
         run: |
@@ -191,7 +191,7 @@ jobs:
           BEVY_ASSET_PATH: ${{ github.workspace }}/retrotool-gui/assets
         run: cargo ${{ matrix.build }} --release --target ${{ matrix.target }} --bin ${{ env.CARGO_BIN_NAME }} --features embed
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ env.CARGO_BIN_NAME }}-${{ matrix.name }}
           path: |
@@ -206,7 +206,7 @@ jobs:
     needs: [ build ]
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v6
         with:
           path: artifacts
       - name: Rename artifacts
@@ -222,6 +222,6 @@ jobs:
           done
           ls -R ../out
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: out/*
