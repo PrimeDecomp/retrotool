@@ -94,7 +94,7 @@ impl<'a> DecompressionState<'a> {
 
     #[inline]
     fn read_byte(&mut self) -> Option<u8> {
-        if self.input.len() > 0 {
+        if !self.input.is_empty() {
             let b = self.input[0];
             self.input = &self.input[1..];
             Some(b)

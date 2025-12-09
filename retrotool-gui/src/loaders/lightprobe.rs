@@ -18,8 +18,10 @@ use crate::{
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "f5d65a8b-ffcc-47ea-8c9d-1ab30cca723c"]
 pub struct LightProbeAsset {
+    #[allow(unused)]
     pub head: LightProbeBundleHeader,
     pub textures: Vec<TextureAsset>,
+    #[allow(unused)]
     pub extra: Vec<LightProbeExtra>,
 }
 

@@ -155,8 +155,7 @@ impl EditorTabSystem for ProjectTab {
                 .iter()
                 .filter(|e| {
                     search.is_empty()
-                        || (search.as_bytes().len() == 4
-                            && e.kind.0.eq_ignore_ascii_case(search.as_bytes()))
+                        || (search.len() == 4 && e.kind.0.eq_ignore_ascii_case(search.as_bytes()))
                         || e.names.iter().any(|n| n.to_ascii_lowercase().contains(search))
                         || e.id.to_string().contains(search)
                 })

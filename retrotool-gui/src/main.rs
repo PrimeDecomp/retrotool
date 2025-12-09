@@ -89,11 +89,11 @@ fn main() {
         .add_plugin(DefaultRaycastingPlugin::<ModConRaycastSet>::default())
         .insert_resource(DefaultPluginState::<ModConRaycastSet>::default().with_debug_cursor())
         // Diagnostics
-        .add_plugin(FrameTimeDiagnosticsPlugin::default())
-        .add_plugin(EntityCountDiagnosticsPlugin::default())
+        .add_plugin(FrameTimeDiagnosticsPlugin)
+        .add_plugin(EntityCountDiagnosticsPlugin)
         .add_plugin(AssetCountDiagnosticsPlugin::<TextureAsset>::default())
         .add_plugin(AssetCountDiagnosticsPlugin::<ModelAsset>::default())
-        .add_plugin(SystemInformationDiagnosticsPlugin::default())
+        .add_plugin(SystemInformationDiagnosticsPlugin)
         // Systems
         .add_startup_system(setup_egui)
         .add_system(file_drop.before(load_files))

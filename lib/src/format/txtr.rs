@@ -764,8 +764,8 @@ pub fn decompress_image(
         | ETextureFormat::RgbaAstc12x10Srgb
         | ETextureFormat::RgbaAstc12x12Srgb => {
             let (bw, bh, _) = format.block_size();
-            let rw = (w + (bw as u32 - 1)) / bw as u32;
-            let rh = (h + (bh as u32 - 1)) / bh as u32;
+            let rw = w.div_ceil(bw as u32);
+            let rh = h.div_ceil(bh as u32);
             ensure!(data.len() == rw as usize * rh as usize * 16);
             let mut image = RgbaImage::new(w, h);
             astc_decode::astc_decode(

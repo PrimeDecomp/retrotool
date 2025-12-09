@@ -1,7 +1,8 @@
+#![allow(clippy::double_parens)]
+
 use std::{
-    collections::HashMap,
-    fs,
-    fs::{DirBuilder, File},
+    collections::{BTreeMap, HashMap},
+    fs::{self, DirBuilder, File},
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
 };
@@ -9,7 +10,7 @@ use std::{
 use anyhow::{bail, ensure, Result};
 use argh::FromArgs;
 use binrw::{binrw, BinReaderExt, BinWriterExt, Endian};
-use gltf_json as json;
+use gltf_json::{self as json, buffer::Stride, validation::USize64};
 use half::f16;
 use image::ColorType;
 use json::validation::Checked::Valid;
@@ -182,7 +183,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
         let mut reader = Cursor::new(&**buf);
         let mut out_buf: Vec<u8> = vec![0; info.vertex_count as usize * info.out_stride as usize];
         let mut w = Cursor::new(&mut *out_buf);
-        let mut tmp_buf = vec![0u8; 16]; // max size of attribute
+        let mut tmp_buf = [0u8; 16]; // max size of attribute
         let mut in_buf = vec![0u8; info.in_stride as usize];
         for _ in 0..info.vertex_count as usize {
             reader.read_exact(&mut in_buf)?;
@@ -223,7 +224,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
         let file_name = format!("vtxbuf{idx}.bin");
         fs::write(args.out_dir.join(&file_name), buf)?;
         json_buffers.push(json::Buffer {
-            byte_length: buf.len() as u32,
+            byte_length: buf.len().into(),
             extensions: Default::default(),
             extras: Default::default(),
             name: None,
@@ -234,7 +235,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
         let file_name = format!("idxbuf{idx}.bin");
         fs::write(args.out_dir.join(&file_name), buf)?;
         json_buffers.push(json::Buffer {
-            byte_length: buf.len() as u32,
+            byte_length: buf.len().into(),
             extensions: Default::default(),
             extras: Default::default(),
             name: None,
@@ -246,11 +247,11 @@ fn convert(args: ConvertArgs) -> Result<()> {
     let mut json_buffer_views = Vec::new();
     let mut json_accessors = Vec::new();
     let mut json_attributes: Vec<
-        HashMap<json::validation::Checked<json::mesh::Semantic>, json::Index<json::Accessor>>,
+        BTreeMap<json::validation::Checked<json::mesh::Semantic>, json::Index<json::Accessor>>,
     > = Vec::new();
     for buf_info in &vbuf.info {
         let num_buffers = buf_info.num_buffers as usize;
-        let mut attribute_map = HashMap::new();
+        let mut attribute_map = BTreeMap::new();
         for idx in 0..num_buffers {
             let target_vtx_buf = cur_buf + idx;
             let info = &buf_infos[target_vtx_buf];
@@ -258,7 +259,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
                 buffer: json::Index::new(target_vtx_buf as u32),
                 byte_length: json_buffers[target_vtx_buf].byte_length,
                 byte_offset: None,
-                byte_stride: Some(info.out_stride),
+                byte_stride: Some(Stride(info.out_stride as usize)),
                 extensions: Default::default(),
                 extras: Default::default(),
                 name: Some(format!("Vertex buffer view {target_vtx_buf}")),
@@ -267,8 +268,8 @@ fn convert(args: ConvertArgs) -> Result<()> {
             for attribute in &info.attributes {
                 let accessor = json::Accessor {
                     buffer_view: Some(json::Index::new(target_vtx_buf as u32)),
-                    byte_offset: attribute.out_offset,
-                    count: info.vertex_count,
+                    byte_offset: Some(USize64(attribute.out_offset as u64)),
+                    count: USize64(info.vertex_count as u64),
                     component_type: Valid(json::accessor::GenericComponentType(
                         match attribute.out_format {
                             EVertexDataFormat::R8Unorm
@@ -545,7 +546,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
                 let mut f = File::create(out_dir.join(format!("{}.png", texture.id)))?;
                 let mut p = png::Encoder::new(&mut f, image.width(), image.height());
                 if txtr.head.format.is_srgb() {
-                    p.set_srgb(SrgbRenderingIntent::Perceptual);
+                    p.set_source_srgb(SrgbRenderingIntent::Perceptual);
                 }
                 p.set_color(match image.color() {
                     ColorType::L8 | ColorType::L16 => png::ColorType::Grayscale,
@@ -783,13 +784,15 @@ fn convert(args: ConvertArgs) -> Result<()> {
         let index_accessor_idx = json_accessors.len() as u32;
         json_accessors.push(json::Accessor {
             buffer_view: Some(json::Index::new(index_buf_idx)),
-            byte_offset: mesh.index_start
-                * match index_type {
-                    EBufferType::U8 => 1,
-                    EBufferType::U16 => 2,
-                    EBufferType::U32 => 4,
-                },
-            count: mesh.index_count,
+            byte_offset: Some(USize64(
+                mesh.index_start as u64
+                    * match index_type {
+                        EBufferType::U8 => 1,
+                        EBufferType::U16 => 2,
+                        EBufferType::U32 => 4,
+                    },
+            )),
+            count: USize64(mesh.index_count as u64),
             component_type: Valid(json::accessor::GenericComponentType(match index_type {
                 EBufferType::U8 => json::accessor::ComponentType::U8,
                 EBufferType::U16 => json::accessor::ComponentType::U16,

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::{io::Cursor, marker::PhantomData};
 
 use anyhow::{bail, ensure, Result};
@@ -300,9 +302,9 @@ pub struct SMeshLoadInformation {
     pub mesh_count: u32,
     #[br(count = mesh_count)]
     pub meshes: Vec<CRenderMesh>,
-    #[br(count = (mesh_count + 3) / 4)]
+    #[br(count = mesh_count.div_ceil(4))]
     pub unk_data_1: Vec<u8>,
-    #[br(count = (mesh_count + 7) / 8)]
+    #[br(count = mesh_count.div_ceil(8))]
     pub unk_data_2: Vec<u8>,
     #[bw(try_calc = shorts.len().try_into())]
     pub short_count: u32,
@@ -310,11 +312,11 @@ pub struct SMeshLoadInformation {
     pub shorts: Vec<u16>,
     // #[bw(try_calc = lod_info.len().try_into())]
     pub lod_count: u8,
-    #[br(count = lod_count)]
+    #[br(count = lod_count as usize)]
     pub lod_info: Vec<SLodInfoOuter>,
     #[bw(calc = if lod_rules.is_empty() { 0 } else { 1 })]
     pub has_lod_rules: u32,
-    #[br(if(has_lod_rules == 1), count(lod_count))]
+    #[br(if(has_lod_rules == 1), count(lod_count as usize))]
     pub lod_rules: Vec<SRenderModelLODRule>,
 }
 

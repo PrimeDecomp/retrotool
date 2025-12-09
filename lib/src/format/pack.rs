@@ -444,7 +444,10 @@ where O: ByteOrderExt + 'static
                 ensure!(asset_entry.asset_type == form.id);
                 ensure!(asset_entry.version.get() == form.reader_version.get());
                 ensure!(asset_entry.other_version.get() == form.writer_version.get());
-                ensure!(form.size.get() == 0 || asset_entry.decompressed_size.get() == form.size.get() + 32 /* RFRM */);
+                ensure!(
+                    form.size.get() == 0
+                        || asset_entry.decompressed_size.get() == form.size.get() + 32 /* RFRM */
+                );
             }
 
             let asset_id = asset_entry.asset_id.get();

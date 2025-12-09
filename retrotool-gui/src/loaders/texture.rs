@@ -27,6 +27,7 @@ use crate::AssetRef;
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
 #[uuid = "83269869-1209-408e-8835-bc6f2496e828"]
 pub struct TextureAsset {
+    #[allow(unused)]
     pub asset_ref: AssetRef,
     pub inner: TextureData<LittleEndian>,
     pub texture: Handle<Image>,
@@ -151,8 +152,8 @@ fn texture_slice_to_image(
     if let TextureFormat::Astc { .. } = format {
         // Round up width / height to ASTC block size
         // wgpu requires it, but should it?
-        width = (width + (bw as u32 - 1)) / bw as u32 * bw as u32;
-        height = (height + (bh as u32 - 1)) / bh as u32 * bh as u32;
+        width = width.div_ceil(bw as u32) * bw as u32;
+        height = height.div_ceil(bh as u32) * bh as u32;
     }
     Image {
         data,
@@ -208,8 +209,8 @@ fn texture_to_image(
         // Round up width / height to ASTC block size
         // wgpu requires it, but should it?
         let (bx, by, _) = data.head.format.block_size();
-        width = (width + (bx as u32 - 1)) / bx as u32 * bx as u32;
-        height = (height + (by as u32 - 1)) / by as u32 * by as u32;
+        width = width.div_ceil(bx as u32) * bx as u32;
+        height = height.div_ceil(by as u32) * by as u32;
     }
     Ok(Image {
         data: image_data,

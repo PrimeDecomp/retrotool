@@ -20,6 +20,7 @@ const K_CHUNK_MCCD: FourCC = FourCC(*b"MCCD");
 
 #[binrw]
 #[derive(Clone, Debug)]
+#[allow(unused)]
 struct SModConHeader {
     unk: u32,
 }
