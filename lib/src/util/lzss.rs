@@ -14,11 +14,15 @@ pub fn decompress<const M: u8>(input: &[u8], output: &mut [u8]) -> bool {
             if !state.read_bytes_direct(&mut b, 0, 2) {
                 return false;
             }
-
             let count = (b[0] as usize >> 4) + (4 - M as usize);
             let offset = (((b[0] as usize & 0xF) << 8) | b[1] as usize) << (M - 1);
-
+            if offset > out_cur {
+                return false;
+            }
             let copy_len = count * group_size;
+            if copy_len > output.len() - out_cur {
+                return false;
+            }
             let src_start = out_cur - offset;
             for i in 0..copy_len {
                 output[out_cur + i] = output[src_start + i];
@@ -101,7 +105,7 @@ impl<'a> DecompressionState<'a> {
 
     #[inline]
     fn read_bytes_direct(&mut self, output: &mut [u8], pos: usize, count: usize) -> bool {
-        if self.input.len() >= count {
+        if self.input.len() >= count && output.len() >= pos + count {
             output[pos..pos + count].copy_from_slice(&self.input[..count]);
             self.input = &self.input[count..];
             true
@@ -124,9 +128,13 @@ impl<'a> DecompressionState<'a> {
     /// Read a literal byte with bitwise extraction from the bitstream
     fn read_byte_bitwise(&mut self) -> Option<u8> {
         let next_byte = self.read_byte()?;
-        let bits_from_cur = 8 - self.bits_remaining;
-        let mask = !(0xffu8.wrapping_shl(bits_from_cur));
-        let result = (next_byte >> self.bits_remaining) & mask | (self.flag_byte << bits_from_cur);
+        let result = if self.bits_remaining == 0 {
+            self.flag_byte
+        } else {
+            let bits_from_cur = 8 - self.bits_remaining;
+            let mask = !(0xffu8.wrapping_shl(bits_from_cur));
+            (self.flag_byte << bits_from_cur) | ((next_byte >> self.bits_remaining) & mask)
+        };
         self.flag_byte = next_byte;
         Some(result)
     }
@@ -135,43 +143,31 @@ impl<'a> DecompressionState<'a> {
         let mut idx: usize = 0;
         let mut bits_read: u32 = 0;
         let mut code_value: u32 = 0;
-
-        loop {
-            let entry = table[idx];
+        while let Some(entry) = table.get(idx) {
             let target_bits = entry.bit_count as u32;
-            let bits_needed = target_bits as i32 - bits_read as i32;
-
-            if target_bits < bits_read || bits_needed == 0 {
-                if bits_needed == 0 {
-                    let next_idx = idx + entry.next_offset as usize;
-                    let threshold_entry = table[next_idx - 1];
-                    if code_value <= threshold_entry.threshold {
-                        let symbol_idx =
-                            code_value as usize + next_idx - 1 - threshold_entry.threshold as usize;
-                        break Some(table[symbol_idx].symbol);
-                    }
+            if target_bits > bits_read {
+                let mut remaining_bits = target_bits - bits_read;
+                while remaining_bits >= 8 {
+                    let byte = self.read_byte_bitwise()?;
+                    code_value = (code_value << 8) | (byte as u32);
+                    remaining_bits -= 8;
                 }
-            } else {
-                for _ in 0..bits_needed {
+                while remaining_bits > 0 {
                     let bit = self.read_bit()?;
                     code_value = (code_value << 1) | (bit as u32);
+                    remaining_bits -= 1;
                 }
                 bits_read = target_bits;
-
-                let next_idx = idx + entry.next_offset as usize;
-                let threshold_entry = table[next_idx - 1];
-                if code_value <= threshold_entry.threshold {
-                    let symbol_idx =
-                        code_value as usize + next_idx - 1 - threshold_entry.threshold as usize;
-                    break Some(table[symbol_idx].symbol);
-                }
             }
-
-            if idx > 255 {
-                break None;
+            let next_idx = idx + entry.next_offset as usize;
+            let threshold = table.get(next_idx - 1)?.threshold;
+            if code_value <= threshold {
+                let symbol_idx = code_value as usize + next_idx - 1 - threshold as usize;
+                return Some(table.get(symbol_idx)?.symbol);
             }
-            idx += entry.next_offset as usize;
+            idx = next_idx;
         }
+        None
     }
 
     /// Decode a back-reference for Huffman-coded LZSS formats
@@ -185,14 +181,19 @@ impl<'a> DecompressionState<'a> {
         let Some(offset_hi) = self.decode_huffman(&HUFFMAN_OFFSET_HI) else {
             return false;
         };
-        let dst_start = *out_cur;
-        let src_start =
-            *out_cur - (((offset_hi as usize) << (8 + M - 1)) | ((offset_lo as usize) << (M - 1)));
-        let copy_len = (length_code as usize + (4 - M as usize)) * (1 << (M - 1));
-        for i in 0..copy_len {
-            output[dst_start + i] = output[src_start + i];
+        let offset = ((offset_hi as usize) << (8 + M - 1)) | ((offset_lo as usize) << (M - 1));
+        let cur = *out_cur;
+        if offset > cur {
+            return false;
         }
-        *out_cur = dst_start + copy_len;
+        let copy_len = (length_code as usize + (4 - M as usize)) * (1 << (M - 1));
+        if copy_len > output.len() - cur {
+            return false;
+        }
+        for i in 0..copy_len {
+            output[cur + i] = output[cur - offset + i];
+        }
+        *out_cur = cur + copy_len;
         true
     }
 }
