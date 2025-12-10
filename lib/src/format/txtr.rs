@@ -112,8 +112,9 @@ pub struct STextureHeader {
     pub width: u32,
     pub height: u32,
     pub layers: u32,
-    pub tile_mode: u32,
-    pub swizzle: u32,
+    pub components: [u8; 4],
+    // pub tile_mode: u32,
+    // pub swizzle: u32,
     #[bw(try_calc = mip_sizes.len().try_into())]
     pub mip_count: u32,
     #[br(count = mip_count)]
@@ -141,14 +142,32 @@ pub struct STextureReadInfo {
     pub size: u32,
 }
 
+// #[binrw]
+// #[derive(Clone, Debug)]
+// pub struct STextureCompressedBufferInfo {
+//     pub index: u32,
+//     pub offset: u32,
+//     pub size: u32,
+//     pub dest_offset: u32,
+//     pub dest_size: u32,
+// }
+
 #[binrw]
 #[derive(Clone, Debug)]
-pub struct STextureCompressedBufferInfo {
-    pub index: u32,
-    pub offset: u32,
-    pub size: u32,
-    pub dest_offset: u32,
-    pub dest_size: u32,
+pub struct STextureCompressedBufferInfo2 {
+    pub first_index: u32,
+    pub first_size: u32,
+    pub first_dest_offset: u32,
+    pub first_dest_size: u32,
+    pub unk: u32,
+    pub second_index: u32,
+    pub second_size: u32,
+    pub second_dest_offset: u32,
+    pub second_dest_size: u32,
+    // Within the second buffer, part of the data may be uncompressed.
+    pub second_decompressed_len: u32,
+    pub second_compressed_len: u32,
+    pub second_compressed_offset: u32,
 }
 
 #[binrw]
@@ -164,10 +183,11 @@ pub struct STextureMetaData {
     pub info_count: u32,
     #[br(count = info_count)]
     pub info: Vec<STextureReadInfo>,
-    #[bw(try_calc = buffers.len().try_into())]
-    pub buffer_count: u32,
-    #[br(count = buffer_count)]
-    pub buffers: Vec<STextureCompressedBufferInfo>,
+    pub buffers: STextureCompressedBufferInfo2,
+    // #[bw(try_calc = buffers.len().try_into())]
+    // pub buffer_count: u32,
+    // #[br(count = buffer_count)]
+    // pub buffers: Vec<STextureCompressedBufferInfo>,
 }
 
 #[binrw]
@@ -574,8 +594,8 @@ impl<O: ByteOrder> TextureData<O> {
     pub fn slice(data: &[u8], meta: &[u8]) -> Result<Self> {
         let (txtr_desc, txtr_data, _) = FormDescriptor::<O>::slice(data)?;
         ensure!(txtr_desc.id == K_FORM_TXTR);
-        ensure!(txtr_desc.reader_version.get() == 47);
-        ensure!(txtr_desc.writer_version.get() == 51);
+        ensure!(txtr_desc.reader_version.get() == 65);
+        ensure!(txtr_desc.writer_version.get() == 66);
 
         let (head_desc, head_data, _) = ChunkDescriptor::<O>::slice(txtr_data)?;
         ensure!(head_desc.id == K_CHUNK_HEAD);
@@ -586,22 +606,126 @@ impl<O: ByteOrder> TextureData<O> {
 
         let meta: STextureMetaData = Cursor::new(meta).read_type(Endian::Little)?;
         let mut buffer = vec![0u8; meta.decompressed_size as usize];
-        for info in &meta.buffers {
-            let (read_idx, read) = meta
-                .info
-                .iter()
-                .enumerate()
-                .find(|(_, i)| i.index as u32 == info.index)
-                .ok_or_else(|| anyhow!("Failed to locate read info for buffer {}", info.index))?;
-            ensure!(read.index as usize == read_idx); // do these ever differ?
+        // for info in &meta.buffers {
+        //     let (read_idx, read) = meta
+        //         .info
+        //         .iter()
+        //         .enumerate()
+        //         .find(|(_, i)| i.index as u32 == info.index)
+        //         .ok_or_else(|| anyhow!("Failed to locate read info for buffer {}", info.index))?;
+        //     ensure!(read.index as usize == read_idx); // do these ever differ?
+        //     let read_buf = &data[read.offset as usize..(read.offset + read.size) as usize];
+        //     let comp_buf = &read_buf[info.offset as usize..(info.offset + info.size) as usize];
+        //     decompress_into(
+        //         comp_buf,
+        //         &mut buffer
+        //             [info.dest_offset as usize..(info.dest_offset + info.dest_size) as usize],
+        //     )?;
+        // }
+
+        // First buffer
+        if meta.buffers.first_size > 0 {
+            let read = meta.info.get(meta.buffers.first_index as usize).ok_or_else(|| {
+                anyhow!("Failed to locate read info for buffer {}", meta.buffers.first_index)
+            })?;
             let read_buf = &data[read.offset as usize..(read.offset + read.size) as usize];
-            let comp_buf = &read_buf[info.offset as usize..(info.offset + info.size) as usize];
-            decompress_into(
-                comp_buf,
-                &mut buffer
-                    [info.dest_offset as usize..(info.dest_offset + info.dest_size) as usize],
-            )?;
+            let comp_buf = &read_buf[..meta.buffers.first_size as usize];
+
+            let dst_start = meta.buffers.first_dest_offset;
+            let dst_end = dst_start + meta.buffers.first_dest_size;
+
+            log::debug!(
+                "Decompressing first buffer: {:#x}-{:#x} ({:#x}) -> {:#x}-{:#x} ({:#x})",
+                read.offset,
+                read.offset + meta.buffers.first_size,
+                meta.buffers.first_size,
+                dst_start,
+                dst_end,
+                dst_end - dst_start
+            );
+            decompress_into(comp_buf, &mut buffer[dst_start as usize..dst_end as usize])
+                .context("Decompressing first buffer")?;
         }
+
+        if meta.buffers.second_size > 0 {
+            let read = meta.info.get(meta.buffers.second_index as usize).ok_or_else(|| {
+                anyhow!("Failed to locate read info for buffer {}", meta.buffers.second_index)
+            })?;
+            let read_buf = &data[read.offset as usize..(read.offset + read.size) as usize];
+
+            // Compressed part of second buffer
+            if meta.buffers.second_compressed_offset < meta.buffers.second_size {
+                let comp_buf = &read_buf[meta.buffers.second_compressed_offset as usize
+                    ..(meta.buffers.second_compressed_offset + meta.buffers.second_compressed_len)
+                        as usize];
+
+                let dst_start = meta.buffers.second_dest_offset;
+                let dst_end = dst_start + meta.buffers.second_decompressed_len;
+
+                log::debug!(
+                    "Decompressing second buffer: {:#x}-{:#x} ({:#x}) -> {:#x}-{:#x} ({:#x})",
+                    read.offset + meta.buffers.second_compressed_offset,
+                    read.offset
+                        + meta.buffers.second_compressed_offset
+                        + meta.buffers.second_compressed_len,
+                    meta.buffers.second_compressed_len,
+                    dst_start,
+                    dst_end,
+                    dst_end - dst_start
+                );
+                decompress_into(comp_buf, &mut buffer[dst_start as usize..dst_end as usize])
+                    .context("Decompressing second buffer")?;
+            }
+
+            // Uncompressed start of second buffer
+            if meta.buffers.second_compressed_offset > 0 {
+                let src_start = 0;
+                let src_end = meta.buffers.second_compressed_offset;
+                let comp_buf = &read_buf[src_start as usize..src_end as usize];
+
+                let dst_start =
+                    meta.buffers.second_dest_offset + meta.buffers.second_decompressed_len;
+                let dst_end = dst_start + meta.buffers.second_compressed_offset;
+
+                log::debug!(
+                    "Copying uncompressed data from {:#x}-{:#x} ({:#x}) to {:#x}-{:#x} ({:#x})",
+                    read.offset + src_start,
+                    read.offset + src_end,
+                    src_end - src_start,
+                    dst_start,
+                    dst_end,
+                    dst_end - dst_start
+                );
+                buffer[dst_start as usize..dst_end as usize].copy_from_slice(comp_buf);
+            }
+
+            // Uncompressed end of second buffer
+            if meta.buffers.second_compressed_offset + meta.buffers.second_compressed_len
+                < meta.buffers.second_size
+            {
+                let src_start =
+                    meta.buffers.second_compressed_offset + meta.buffers.second_compressed_len;
+                let src_end = meta.buffers.second_size;
+                let comp_buf = &read_buf[src_start as usize..src_end as usize];
+
+                let dst_start = meta.buffers.second_dest_offset
+                    + meta.buffers.second_compressed_offset
+                    + meta.buffers.second_decompressed_len;
+                let dst_end = meta.buffers.second_dest_offset + meta.buffers.second_dest_size;
+
+                log::debug!(
+                    "Copying uncompressed data from {:#x}-{:#x} ({:#x}) to {:#x}-{:#x} ({:#x})",
+                    read.offset + src_start,
+                    read.offset + src_end,
+                    src_end - src_start,
+                    dst_start,
+                    dst_end,
+                    dst_end - dst_start
+                );
+                buffer[dst_start as usize..dst_end as usize].copy_from_slice(comp_buf);
+            }
+        }
+
         let deswizzled = deswizzle(&head, &buffer)?;
         Ok(Self { head, data: deswizzled, _marker: PhantomData })
     }

@@ -1,6 +1,6 @@
 /// https://wiki.axiodl.com/w/LZSS_Compression
 pub fn decompress<const M: u8>(input: &[u8], output: &mut [u8]) -> bool {
-    let group_size: usize = 1 << (M - 1);
+    let group_size: usize = 1 << M;
 
     let mut state = DecompressionState::new(input);
     let mut out_cur: usize = 0;
@@ -14,8 +14,8 @@ pub fn decompress<const M: u8>(input: &[u8], output: &mut [u8]) -> bool {
             if !state.read_bytes_direct(&mut b, 0, 2) {
                 return false;
             }
-            let count = (b[0] as usize >> 4) + (4 - M as usize);
-            let offset = (((b[0] as usize & 0xF) << 8) | b[1] as usize) << (M - 1);
+            let count = (b[0] as usize >> 4) + (3 - M as usize);
+            let offset = (((b[0] as usize & 0xF) << 8) | b[1] as usize) << M;
             if offset > out_cur {
                 return false;
             }
@@ -42,15 +42,15 @@ pub fn decompress<const M: u8>(input: &[u8], output: &mut [u8]) -> bool {
 
 /// Decompresses Huffman-coded LZSS variants introduced in Metroid Prime 4.
 ///
-/// M = 1: 0xC format (8-bit groups)
-/// M = 2: 0xD format (16-bit groups)
-/// M = 3: 0xE format (32-bit groups)
+/// M = 0: 0xC format (8-bit groups)
+/// M = 1: 0xD format (16-bit groups)
+/// M = 2: 0xE format (32-bit groups)
 ///
 /// This format uses:
 /// - Flag bits indicating literal (0) or back-reference (1)
 /// - Huffman-coded length and offset values for back-references
 pub fn decompress_huffman<const M: u8>(input: &[u8], output: &mut [u8]) -> bool {
-    let group_size: usize = 1 << (M - 1);
+    let group_size: usize = 1 << M;
 
     let mut state = DecompressionState::new(input);
     let mut out_cur: usize = 0;
@@ -106,8 +106,9 @@ impl<'a> DecompressionState<'a> {
     #[inline]
     fn read_bytes_direct(&mut self, output: &mut [u8], pos: usize, count: usize) -> bool {
         if self.input.len() >= count && output.len() >= pos + count {
-            output[pos..pos + count].copy_from_slice(&self.input[..count]);
-            self.input = &self.input[count..];
+            let (data, rest) = self.input.split_at(count);
+            output[pos..pos + count].copy_from_slice(data);
+            self.input = rest;
             true
         } else {
             false
@@ -181,15 +182,16 @@ impl<'a> DecompressionState<'a> {
         let Some(offset_hi) = self.decode_huffman(&HUFFMAN_OFFSET_HI) else {
             return false;
         };
-        let offset = ((offset_hi as usize) << (8 + M - 1)) | ((offset_lo as usize) << (M - 1));
+        let offset = ((offset_hi as usize) << (8 + M)) | ((offset_lo as usize) << M);
         let cur = *out_cur;
         if offset > cur {
             return false;
         }
-        let copy_len = (length_code as usize + (4 - M as usize)) * (1 << (M - 1));
+        let copy_len = (length_code as usize + (3 - M as usize)) * (1 << M);
         if copy_len > output.len() - cur {
             return false;
         }
+        // println!("Copying {} bytes ({}/group) from offset {} to {} (overlaps? {})", copy_len, M, cur - offset, cur, copy_len > offset);
         for i in 0..copy_len {
             output[cur + i] = output[cur - offset + i];
         }

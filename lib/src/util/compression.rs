@@ -24,6 +24,10 @@ pub fn decompress_into(compressed_data: &[u8], out: &mut [u8]) -> Result<u32> {
     if compressed_data.len() < 4 {
         bail!("Invalid compressed data size: {}", compressed_data.len());
     }
+    if compressed_data.len() == out.len() {
+        out.copy_from_slice(compressed_data);
+        return Ok(0);
+    }
     let mode = u32::from_le_bytes(compressed_data[0..4].try_into().unwrap());
     let data = &compressed_data[4..];
     if !match mode {
@@ -35,12 +39,12 @@ pub fn decompress_into(compressed_data: &[u8], out: &mut [u8]) -> Result<u32> {
                 false
             }
         }
-        1 => lzss::decompress::<1>(data, out),
-        2 => lzss::decompress::<2>(data, out),
-        3 => lzss::decompress::<3>(data, out),
-        12 => lzss::decompress_huffman::<1>(data, out),
-        13 => lzss::decompress_huffman::<2>(data, out),
-        14 => lzss::decompress_huffman::<3>(data, out),
+        1 => lzss::decompress::<0>(data, out),
+        2 => lzss::decompress::<1>(data, out),
+        3 => lzss::decompress::<2>(data, out),
+        12 => lzss::decompress_huffman::<0>(data, out),
+        13 => lzss::decompress_huffman::<1>(data, out),
+        14 => lzss::decompress_huffman::<2>(data, out),
         _ => bail!("Unsupported compression mode {}", mode),
     } {
         bail!("Decompression failed");
