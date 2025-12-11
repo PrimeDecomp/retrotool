@@ -34,6 +34,16 @@ pub struct ObjectTransform {
     pub xf: CTransform4f,
 }
 
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct SUnknown {
+    pub f0: f32,
+    pub f1: f32,
+    #[br(map = |v: TaggedVec<u32, _>| v.data)]
+    #[bw(map = |v| TaggedVec::<u32, _>::new(v.clone()))]
+    pub ints: Vec<u32>,
+}
+
 #[binread]
 #[derive(Clone, Debug)]
 pub struct SModConVisualData {
@@ -48,15 +58,25 @@ pub struct SModConVisualData {
     #[br(map = |v: TaggedVec<u32, _>| v.data)]
     pub object_transforms: Vec<ObjectTransform>,
     #[br(map = |v: TaggedVec<u32, _>| v.data)]
-    pub bytes_1: Vec<u8>,
+    pub unknowns: Vec<SUnknown>,
+    #[br(map = |v: TaggedVec<u32, _>| v.data)]
+    pub bytes_2: Vec<u8>,
+    #[br(map = |v: TaggedVec<u32, _>| v.data)]
+    pub bytes_3: Vec<u8>,
+    #[br(map = |v: TaggedVec<u32, _>| v.data)]
+    pub bytes_4: Vec<u8>,
+    #[br(map = |v: TaggedVec<u32, _>| v.data)]
+    pub bytes_5: Vec<u8>,
+    #[br(map = |v: TaggedVec<u32, _>| v.data)]
+    pub bytes_6: Vec<u8>,
     #[br(map = |v: TaggedVec<u32, _>| v.data)]
     pub shorts_1: Vec<u16>,
     #[br(map = |v: TaggedVec<u32, _>| v.data)]
     pub shorts_2: Vec<u16>,
     #[br(map = |v: TaggedVec<u32, _>| v.data)]
-    pub bytes_2: Vec<u8>,
+    pub bytes_7: Vec<u8>,
     #[br(map = |v: TaggedVec<u32, _>| v.data)]
-    pub bytes_3: Vec<u8>,
+    pub bytes_8: Vec<u8>,
     // TODO
 }
 
@@ -70,8 +90,8 @@ impl<O: ByteOrder> ModConData<O> {
     pub fn slice(data: &[u8]) -> Result<Self> {
         let (mcon_desc, mut mcon_data, _) = FormDescriptor::<O>::slice(data)?;
         ensure!(mcon_desc.id == K_FORM_MCON);
-        ensure!(mcon_desc.reader_version.get() == 41);
-        ensure!(mcon_desc.writer_version.get() == 44);
+        ensure!(mcon_desc.reader_version.get() == 72);
+        ensure!(mcon_desc.writer_version.get() == 72);
 
         let mut data = Self { visual_data: None, _marker: PhantomData };
         while !mcon_data.is_empty() {

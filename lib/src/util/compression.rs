@@ -11,7 +11,7 @@ pub fn decompress_buffer<'a>(
     if compressed_data.len() < 4 {
         bail!("Invalid compressed data size: {}", compressed_data.len());
     }
-    if compressed_data[0..4] == [0u8; 4] {
+    if compressed_data[0..4] == [0u8; 4] { // compressed_data.len() as u64 == decompressed_size ||
         // Shortcut for uncompressed data
         return Ok((0, Cow::Borrowed(&compressed_data[4..])));
     }
@@ -24,10 +24,10 @@ pub fn decompress_into(compressed_data: &[u8], out: &mut [u8]) -> Result<u32> {
     if compressed_data.len() < 4 {
         bail!("Invalid compressed data size: {}", compressed_data.len());
     }
-    if compressed_data.len() == out.len() {
-        out.copy_from_slice(compressed_data);
-        return Ok(0);
-    }
+    // if compressed_data.len() == out.len() {
+    //     out.copy_from_slice(compressed_data);
+    //     return Ok(0);
+    // }
     let mode = u32::from_le_bytes(compressed_data[0..4].try_into().unwrap());
     let data = &compressed_data[4..];
     if !match mode {

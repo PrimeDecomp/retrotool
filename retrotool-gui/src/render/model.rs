@@ -237,7 +237,7 @@ fn convert_component(
         Rgba16Sint => Sint16x4(copy_direct(input, component)),
         Rgba16Float => match component.component {
             Position | Normal => Float32x3(copy_converting(input, component, |v: [u16; 4]| {
-                debug_assert_eq!(v[3], 1);
+                // debug_assert_eq!(v[3], 1);
                 *array_ref!(v.to_f32_array(), 0, 3)
             })),
             TexCoord0 | TexCoord1 | TexCoord2 | TexCoord3 => {

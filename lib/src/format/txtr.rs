@@ -643,8 +643,12 @@ impl<O: ByteOrder> TextureData<O> {
                 dst_end,
                 dst_end - dst_start
             );
-            decompress_into(comp_buf, &mut buffer[dst_start as usize..dst_end as usize])
-                .context("Decompressing first buffer")?;
+            if comp_buf.len() as u32 == dst_end - dst_start {
+                buffer[dst_start as usize..dst_end as usize].copy_from_slice(comp_buf);
+            } else {
+                decompress_into(comp_buf, &mut buffer[dst_start as usize..dst_end as usize])
+                    .context("Decompressing first buffer")?;
+            }
         }
 
         if meta.buffers.second_size > 0 {
@@ -673,8 +677,12 @@ impl<O: ByteOrder> TextureData<O> {
                     dst_end,
                     dst_end - dst_start
                 );
-                decompress_into(comp_buf, &mut buffer[dst_start as usize..dst_end as usize])
-                    .context("Decompressing second buffer")?;
+                if comp_buf.len() as u32 == dst_end - dst_start {
+                    buffer[dst_start as usize..dst_end as usize].copy_from_slice(comp_buf);
+                } else {
+                    decompress_into(comp_buf, &mut buffer[dst_start as usize..dst_end as usize])
+                        .context("Decompressing second buffer")?;
+                }
             }
 
             // Uncompressed start of second buffer

@@ -542,10 +542,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         in_uv(&in2, material.emissive_uv)
     ) * material.emissive_color;
 
-    let metl_map = sample_metallic_map(&in2);
-    pbr_input.material.base_color *= metl_map.r; // AO
-    pbr_input.material.perceptual_roughness = metl_map.g;
-    pbr_input.material.metallic = metl_map.b;
+    //let metl_map = sample_metallic_map(&in2);
+    //pbr_input.material.base_color *= metl_map.r; // AO
+    //pbr_input.material.perceptual_roughness = metl_map.g;
+    //pbr_input.material.metallic = metl_map.b;
 
 #ifdef VERTEX_NORMALS
     pbr_input.N = apply_normal_mapping(

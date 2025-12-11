@@ -207,7 +207,7 @@ fn build_material(
     };
     for data in &materials[key.material_idx].data {
         match data.data_id {
-            EMaterialDataId::DIFT | EMaterialDataId::BCLR => match &data.data {
+            /*EMaterialDataId::DIFT |*/ EMaterialDataId::BCLR => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
                     out_mat.base_color_l0 = Color::WHITE;
                     out_mat.base_color_texture_0 = texture_images.get(&texture.id).cloned();

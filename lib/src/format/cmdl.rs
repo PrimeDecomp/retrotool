@@ -51,6 +51,7 @@ pub struct SModelBufferInfo {
     pub offset: u32,
     pub size: u32,
     pub dest_size: u32,
+    pub unk: u32,
 }
 
 #[binrw]
@@ -103,11 +104,12 @@ pub struct SVertexBufferInfoSection {
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct SVertexBufferInfo {
-    pub vertex_count: u32,
+    // pub vertex_count: u32,
     #[bw(try_calc = components.len().try_into())]
     pub component_count: u32,
     #[br(count = component_count)]
     pub components: Vec<SVertexDataComponent>,
+    pub unk: u32,
     pub num_buffers: u8, // correct?
 }
 
@@ -378,10 +380,10 @@ pub struct CMaterialCache {
     pub render_type_count: u32,
     #[br(count = render_type_count)]
     pub render_types: Vec<SMaterialRenderTypes>,
-    #[bw(try_calc = data_types.len().try_into())]
+    #[bw(try_calc = data.len().try_into())]
     pub data_count: u32,
-    #[br(count = data_count)]
-    pub data_types: Vec<SMaterialType>,
+    // #[br(count = data_count)]
+    // pub data_types: Vec<SMaterialType>,
     #[br(count = data_count)]
     pub data: Vec<CMaterialData>,
 }
@@ -429,6 +431,8 @@ pub enum CMaterialDataInner {
     Mat4(CMatrix4f),
     #[br(pre_assert(ty == EMaterialDataType::Complex && id.is_texture_layered()))]
     LayeredTexture(CLayeredTextureData),
+    #[br(pre_assert(ty == EMaterialDataType::Complex && id == EMaterialDataId::XCH0))]
+    UnknownComplex([u8; 56]),
 }
 
 #[binrw]
@@ -833,8 +837,8 @@ where O: ByteOrder + 'static
         let (cmdl_desc, cmdl_data, _) = FormDescriptor::<O>::slice(data)?;
         match cmdl_desc.id {
             K_FORM_CMDL => {
-                ensure!(cmdl_desc.reader_version.get() == 114);
-                ensure!(cmdl_desc.writer_version.get() == 125);
+                ensure!(cmdl_desc.reader_version.get() == 163);
+                ensure!(cmdl_desc.writer_version.get() == 172);
             }
             K_FORM_SMDL => {
                 ensure!(cmdl_desc.reader_version.get() == 127);
@@ -859,14 +863,22 @@ where O: ByteOrder + 'static
         slice_chunks::<O, _, _>(
             cmdl_data,
             |desc, data| {
+                let mut reader = Cursor::new(data);
                 match desc.id {
                     K_CHUNK_HEAD | K_CHUNK_SKHD | K_CHUNK_WDHD => {
-                        head = Some(Cursor::new(data).read_type(Endian::Little)?)
+                        head = Some(reader.read_type(Endian::Little)?)
                     }
-                    K_CHUNK_MTRL => mtrl = Some(Cursor::new(data).read_type(Endian::Little)?),
-                    K_CHUNK_MESH => mesh = Some(Cursor::new(data).read_type(Endian::Little)?),
-                    K_CHUNK_VBUF => vbuf = Some(Cursor::new(data).read_type(Endian::Little)?),
-                    K_CHUNK_IBUF => ibuf = Some(Cursor::new(data).read_type(Endian::Little)?),
+                    K_CHUNK_MTRL => {
+                        let fcc: FourCC = reader.read_type(Endian::Little)?;
+                        if fcc == FourCC(*b"LEGA") {
+                            mtrl = Some(reader.read_type(Endian::Little)?);
+                        } else {
+                            bail!("Unsupported material format {fcc}");
+                        }
+                    },
+                    K_CHUNK_MESH => mesh = Some(reader.read_type(Endian::Little)?),
+                    K_CHUNK_VBUF => vbuf = Some(reader.read_type(Endian::Little)?),
+                    K_CHUNK_IBUF => ibuf = Some(reader.read_type(Endian::Little)?),
                     // GPU data decompressed via META
                     K_CHUNK_GPU => {}
                     id => bail!("Unknown {} chunk {id:?}", cmdl_desc.id),
@@ -881,11 +893,11 @@ where O: ByteOrder + 'static
         let Some(vbuf) = vbuf else { bail!("Failed to locate VBUF") };
         let Some(ibuf) = ibuf else { bail!("Failed to locate IBUF") };
 
-        // log::debug!("HEAD: {head:#?}");
-        // log::debug!("MTRL: {mtrl:#?}");
-        // log::debug!("MESH: {mesh:#?}");
-        // log::debug!("VBUF: {vbuf:#?}");
-        // log::debug!("IBUF: {ibuf:#?}");
+        log::debug!("HEAD: {head:#?}");
+        log::debug!("MTRL: {mtrl:#?}");
+        log::debug!("MESH: {mesh:#?}");
+        log::debug!("VBUF: {vbuf:#?}");
+        log::debug!("IBUF: {ibuf:#?}");
 
         Ok(Self { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers, _marker: PhantomData })
     }

@@ -129,7 +129,7 @@ fn convert(args: ConvertArgs) -> Result<()> {
         let num_buffers = info.num_buffers as usize;
         let mut infos =
             vec![
-                VertexBufferInfo { vertex_count: info.vertex_count, ..Default::default() };
+                VertexBufferInfo { vertex_count: todo!("info.vertex_count"), ..Default::default() };
                 num_buffers
             ];
         for component in &info.components {

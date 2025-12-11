@@ -455,6 +455,9 @@ fn material_ui(
                             });
                         }
                     }
+                    CMaterialDataInner::UnknownComplex(data) => {
+                        property_with_value(ui, "Unknown Complex", format!("{:?}", data));
+                    }
                 }
             });
         }
