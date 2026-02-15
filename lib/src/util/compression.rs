@@ -4,10 +4,10 @@ use anyhow::{bail, Result};
 
 use crate::util::lzss;
 
-pub fn decompress_buffer(
-    compressed_data: &[u8],
+pub fn decompress_buffer<'a>(
+    compressed_data: &'a [u8],
     decompressed_size: u64,
-) -> Result<(u32, Cow<[u8]>)> {
+) -> Result<(u32, Cow<'a, [u8]>)> {
     if compressed_data.len() < 4 {
         bail!("Invalid compressed data size: {}", compressed_data.len());
     }
