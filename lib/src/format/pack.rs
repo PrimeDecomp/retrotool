@@ -511,6 +511,7 @@ where O: ByteOrderExt + 'static
             .write(w, |w| {
                 ChunkDescriptor::<O> { id: K_CHUNK_ADIR, unk: U32::new(1), ..Default::default() }
                     .write(w, |w| {
+                    w.write_type(&(asset_directory.len() as u32), Endian::Little)?;
                     adir_pos = w.stream_position()?;
                     w.write_all(asset_directory.as_slice().as_bytes())?;
                     Ok(())
