@@ -540,7 +540,7 @@ impl Debug for CObjectId {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result { write!(f, "{:?}", self.0) }
 }
 
-#[derive(Copy, Clone, Debug, AsBytes, FromBytes, FromZeroes)]
+#[derive(Copy, Clone, Debug, AsBytes, FromBytes, FromZeroes, PartialEq)]
 #[repr(C, packed)]
 pub struct ByteOrderUuid<O: ByteOrder> {
     inner: uuid::Bytes,
