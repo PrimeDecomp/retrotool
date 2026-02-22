@@ -470,17 +470,19 @@ where O: ByteOrderExt + 'static
             ensure!(asset.id >= last_uuid, "Assets must be ordered by ID ascending");
             last_uuid = asset.id;
 
-            asset_directory.push(AssetDirectoryEntry {
-                asset_type: asset.kind,
-                asset_id: ByteOrderUuid::new(asset.id),
-                version: U32::new(asset.version),
-                other_version: U32::new(asset.other_version),
-                offset: U64::new(0),
-                decompressed_size: U64::new(asset.data.len() as u64),
-                size: U64::new(asset.data.len() as u64),
-            });
-            if asset.meta.is_some() {
-                metadata.entries.push(MetadataTableEntry { asset_id: asset.id, offset: 0 });
+            for _ in 0..std::cmp::max(1, asset.names.len()) {
+                asset_directory.push(AssetDirectoryEntry {
+                    asset_type: asset.kind,
+                    asset_id: ByteOrderUuid::new(asset.id),
+                    version: U32::new(asset.version),
+                    other_version: U32::new(asset.other_version),
+                    offset: U64::new(0),
+                    decompressed_size: U64::new(asset.data.len() as u64),
+                    size: U64::new(asset.data.len() as u64),
+                });
+                if asset.meta.is_some() {
+                    metadata.entries.push(MetadataTableEntry { asset_id: asset.id, offset: 0 });
+                }
             }
             for name in &asset.names {
                 // Default::default makes the IDE happy,
@@ -520,10 +522,16 @@ where O: ByteOrderExt + 'static
                     .write(w, |w| {
                     let start = w.stream_position()?;
                     w.write_type(&metadata, Endian::Little)?;
-                    for (asset, entry) in
-                        self.assets.iter().filter(|a| a.meta.is_some()).zip(&mut metadata.entries)
+                    for (asset, entry_chunk) in
+                        self.assets.iter()
+                        .filter(|a| a.meta.is_some())
+                        .zip(&mut metadata.entries
+                            .chunk_by_mut(|e1, e2| e1.asset_id == e2.asset_id)
+                        )
                     {
-                        entry.offset = (w.stream_position()? - start) as u32;
+                        for entry in entry_chunk {
+                            entry.offset = (w.stream_position()? - start) as u32;
+                        }
                         let data = asset.meta.as_ref().unwrap();
                         w.write_type(&(data.len() as u32), Endian::Little)?;
                         w.write_all(data)?;
@@ -541,11 +549,17 @@ where O: ByteOrderExt + 'static
                 })?;
                 Ok(())
             })?;
-            let mut entries: Vec<(&Asset, &mut AssetDirectoryEntry<O>)> =
-                self.assets.iter().zip(&mut asset_directory).collect();
-            entries.sort_by_key(|(a, _)| a.info.orig_offset);
-            for (asset, entry) in entries {
-                entry.offset.set(w.stream_position()?);
+            let mut entry_chunks: Vec<(&Asset, &mut [AssetDirectoryEntry<O>])> =
+                self.assets.iter()
+                    .zip(&mut asset_directory
+                        .chunk_by_mut(|e1, e2| e1.asset_id == e2.asset_id)
+                    )
+                    .collect();
+            entry_chunks.sort_by_key(|(a, _)| a.info.orig_offset);
+            for (asset, entry_chunk) in entry_chunks {
+                for entry in entry_chunk {
+                    entry.offset.set(w.stream_position()?);
+                }
                 w.write_all(&asset.data)?;
             }
             Ok(())
