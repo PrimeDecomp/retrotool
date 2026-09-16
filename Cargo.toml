@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "lib",
+    "remax",
     "retrotool",
     "retrotool-gui",
 ]

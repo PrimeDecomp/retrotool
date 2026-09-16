@@ -149,8 +149,8 @@ impl EditorTabSystem for RoomTab {
                     }
                     property_with_value(
                         ui,
-                        "Unk1",
-                        format!("{}", room_asset.inner.room_header.unk1),
+                        "Room type",
+                        format!("{}", room_asset.inner.room_header.room_type),
                     );
                     property_with_value(
                         ui,
@@ -222,11 +222,29 @@ impl EditorTabSystem for RoomTab {
                             |ui| {
                                 property_with_value(ui, "Name", layer.header.name.clone());
                                 property_with_value(ui, "ID", layer.header.id.to_string());
-                                property_with_value(ui, "Unk", layer.header.unk.to_string());
-                                for id in &layer.header.ids {
-                                    property_with_value(ui, "Unk ID", id.to_string());
+                                for id in &layer.header.load_unit_ids {
+                                    property_with_value(ui, "Load unit", id.to_string());
                                 }
-                                property_with_value(ui, "Unk2", layer.header.unk2.to_string());
+                                property_with_value(
+                                    ui,
+                                    "Reload set",
+                                    layer.header.reload_set_id.to_string(),
+                                );
+                                property_with_value(
+                                    ui,
+                                    "Entities",
+                                    layer.header.entity_count.to_string(),
+                                );
+                                property_with_value(
+                                    ui,
+                                    "Generated definitions",
+                                    layer.header.generated_object_count.to_string(),
+                                );
+                                property_with_value(
+                                    ui,
+                                    "Reset on activation",
+                                    (layer.header.reset_on_activation != 0).to_string(),
+                                );
                                 for (component_idx, component) in
                                     layer.components.iter().enumerate()
                                 {

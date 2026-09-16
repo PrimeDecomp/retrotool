@@ -1,0 +1,13 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "RoomController",
+  "description": "SLdrRoomController::Load7100818ff4. Resident controller-list membership is separate runtime activation state.",
+  "type": "property_list",
+  "properties": {
+    "0x30a4d63d": {
+      "name": "Room",
+      "type": "id",
+      "description": "ROOM resource ID, invalid by default. Used by GetRoomResourceId and zone probe-bounds selection."
+    }
+  }
+}

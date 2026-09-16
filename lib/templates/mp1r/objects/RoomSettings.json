@@ -1,0 +1,13 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "RoomSettings",
+  "description": "SLdrRoomSettings::Load710081c398. Baked lighting modulation is a separate runtime setter; no color is serialized here.",
+  "type": "property_list",
+  "properties": {
+    "0xc028d01f": {
+      "name": "Room Render Settings",
+      "type": "struct",
+      "struct": "RoomRenderSettings"
+    }
+  }
+}

@@ -1,14 +1,57 @@
 #![allow(clippy::useless_conversion)] // for TaggedVec / VecIndex
 
+pub mod baked_lighting;
+pub mod baked_lighting_scene;
 pub mod chunk;
 pub mod cmdl;
 pub mod foot;
+pub mod load_unit_logic;
 pub mod ltpb;
+pub mod material_ambient;
+pub mod material_archive;
+pub mod material_feature_semantics;
+pub mod material_features;
+pub mod material_graphics_state;
+pub mod material_lighting;
+pub mod material_predicates;
+pub mod material_runtime;
+pub mod material_scene_bindings;
+pub mod material_selection;
+pub mod material_shader_draw;
+pub mod material_skinning;
+pub mod material_texture_bindings;
+pub mod material_uniform_bindings;
+pub mod maya_spline;
+pub mod maya_spline_runtime;
 pub mod mcon;
+pub mod model_animated_uv;
+pub mod model_shader_inputs;
 pub mod mtrl;
 pub mod pack;
+pub mod reflection_probe;
+pub mod retro_math;
 pub mod rfrm;
 pub mod room;
+pub mod room_color;
+pub mod room_lighting;
+pub mod script_activation;
+pub mod script_layers;
+pub mod script_links;
+pub mod script_load_units;
+pub mod script_performance_groups;
+pub mod shader_dxbc;
+pub mod shader_nvn;
+pub mod shader_nvn_bindings;
+pub mod shader_nvn_globals;
+pub mod shader_nvn_graphics;
+pub mod shader_nvn_program;
+pub mod shader_nvn_samples;
+pub mod shader_nvn_texture;
+pub mod shader_nvn_uniforms;
+pub mod shader_sdx;
+pub mod texture_nvn;
+pub mod texture_sampler;
+pub mod time_playback;
 pub mod txtr;
 
 use std::{

@@ -16,7 +16,9 @@ pub enum SubCommand {
     Clsn(cmd::clsn::Args),
     Cmdl(cmd::cmdl::Args),
     Fmv0(cmd::fmv0::Args),
+    Mtrl(cmd::mtrl::Args),
     Pak(cmd::pak::Args),
+    Refl(cmd::refl::Args),
     Txtr(cmd::txtr::Args),
 }
 
@@ -32,7 +34,9 @@ fn main() {
         SubCommand::Clsn(args) => cmd::clsn::run(args),
         SubCommand::Cmdl(args) => cmd::cmdl::run(args),
         SubCommand::Fmv0(args) => cmd::fmv0::run(args),
+        SubCommand::Mtrl(args) => cmd::mtrl::run(args),
         SubCommand::Pak(args) => cmd::pak::run(args),
+        SubCommand::Refl(args) => cmd::refl::run(args),
         SubCommand::Txtr(args) => cmd::txtr::run(args),
     };
     if let Err(e) = result {

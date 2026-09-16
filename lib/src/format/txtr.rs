@@ -124,7 +124,9 @@ pub struct STextureHeader {
 #[binrw]
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct STextureSamplerData {
-    pub unk: u32,
+    /// Bit 1 requests the sample-shading sampler with LOD bias -1. Other
+    /// bits are retained; they do not affect BuildSamplerParams.
+    pub flags: u32,
     pub filter: ETextureFilter,
     pub mip_filter: ETextureMipFilter,
     pub wrap_x: ETextureWrap,
@@ -609,13 +611,15 @@ impl<O: ByteOrder> TextureData<O> {
 
 #[derive(Debug, Clone)]
 pub struct TextureSlice {
+    /// Logical texel dimensions. A compressed mip can be smaller than a block;
+    /// its data_range still includes the complete storage block(s).
     pub width: u32,
     pub height: u32,
     pub data_range: Range<usize>,
 }
 
 pub fn slice_texture<O: ByteOrder>(texture: &TextureData<O>) -> Result<Vec<Vec<TextureSlice>>> {
-    let (bw, bh, bd) = texture.head.format.block_size();
+    let (_, _, bd) = texture.head.format.block_size();
     let mut out = Vec::with_capacity(texture.head.mip_sizes.len());
     let mut w = texture.head.width;
     let mut h = texture.head.height;
@@ -636,8 +640,8 @@ pub fn slice_texture<O: ByteOrder>(texture: &TextureData<O>) -> Result<Vec<Vec<T
                     .collect(),
             );
             start += size as usize;
-            w = max(w / 2, bw as u32);
-            h = max(h / 2, bh as u32);
+            w = max(w / 2, 1);
+            h = max(h / 2, 1);
             d = max(d / 2, bd as u32);
         }
     } else {
@@ -653,8 +657,8 @@ pub fn slice_texture<O: ByteOrder>(texture: &TextureData<O>) -> Result<Vec<Vec<T
                     data_range: start..start + layer_size,
                 });
                 start += layer_size;
-                w = max(w / 2, bw as u32);
-                h = max(h / 2, bh as u32);
+                w = max(w / 2, 1);
+                h = max(h / 2, 1);
             }
         }
     }
@@ -805,6 +809,29 @@ pub fn decompress_image(
     })
 }
 
+/// Decode one BC6H depth/array slice to little-endian RGBA16F texels.
+/// BC6H stores RGB half floats; the added alpha is exactly 1.0. This keeps HDR
+/// and signed values when a backend cannot sample the compressed allocation.
+pub fn decompress_bc6h_rgba16(
+    format: ETextureFormat,
+    w: u32,
+    h: u32,
+    data: &[u8],
+) -> Result<Vec<u8>> {
+    ensure!(
+        matches!(format, ETextureFormat::BptcUfloat | ETextureFormat::BptcSfloat),
+        "Expected a BC6H texture, got {format:?}"
+    );
+    let image = decompress_bcn::<Rgb<u16>, _, BC6H_BLOCK_SIZE>(data, w, h, |src, dst, pitch| {
+        bcdec_rs::bc6h_half(src, dst, pitch, format == ETextureFormat::BptcSfloat)
+    })?;
+    Ok(image
+        .pixels()
+        .flat_map(|p| [p.0[0], p.0[1], p.0[2], 0x3c00])
+        .flat_map(u16::to_le_bytes)
+        .collect())
+}
+
 fn decompress_bcn<P, F, const BLOCK_SIZE: usize>(
     data: &[u8],
     w: u32,
@@ -812,22 +839,103 @@ fn decompress_bcn<P, F, const BLOCK_SIZE: usize>(
     func: F,
 ) -> Result<ImageBuffer<P, Vec<P::Subpixel>>>
 where
-    P: Pixel,
+    P: Pixel + 'static,
+    P::Subpixel: 'static,
     F: Fn(&[u8], &mut [P::Subpixel], usize),
 {
-    let w = max(w, 4);
-    let h = max(h, 4);
-    ensure!(data.len() == ((w / 4) * (h / 4)) as usize * BLOCK_SIZE);
-    let mut image = ImageBuffer::<P, Vec<P::Subpixel>>::new(w, h);
+    ensure!(w > 0 && h > 0, "Empty BC texture dimensions");
+    let padded_w = w.div_ceil(4) * 4;
+    let padded_h = h.div_ceil(4) * 4;
+    ensure!(data.len() == ((padded_w / 4) * (padded_h / 4)) as usize * BLOCK_SIZE);
+    let mut image = ImageBuffer::<P, Vec<P::Subpixel>>::new(padded_w, padded_h);
     let buffer = image.as_flat_samples_mut();
     let mut src = data;
-    for i in (0..h as usize).step_by(4) {
-        for j in (0..w as usize).step_by(4) {
+    for i in (0..padded_h as usize).step_by(4) {
+        for j in (0..padded_w as usize).step_by(4) {
             let start = i * buffer.layout.height_stride + j * buffer.layout.width_stride;
             let dst = &mut buffer.samples[start..];
             func(&src[..BLOCK_SIZE], dst, buffer.layout.height_stride);
             src = &src[BLOCK_SIZE..];
         }
     }
-    Ok(image)
+    Ok(if w == padded_w && h == padded_h {
+        image
+    } else {
+        image::imageops::crop_imm(&image, 0, 0, w, h).to_image()
+    })
+}
+
+#[cfg(test)]
+mod slice_tests {
+    use zerocopy::LittleEndian;
+
+    use super::*;
+
+    #[test]
+    fn bc6h_fallback_preserves_hdr_signed_endpoints_and_cropped_dimensions() {
+        // One-region mode 11, identical 10-bit endpoints, zero indices.
+        // The extreme endpoints expand to the largest finite half floats.
+        for (format, endpoint, expected) in [
+            (ETextureFormat::BptcUfloat, 1023u128, 0x7bffu16),
+            (ETextureFormat::BptcSfloat, 511, 0x7bff),
+            (ETextureFormat::BptcSfloat, 512, 0xfbff),
+        ] {
+            let mut block = 3u128;
+            for j in 0..6 {
+                block |= endpoint << (5 + j * 10);
+            }
+            let decoded = decompress_bc6h_rgba16(format, 3, 2, &block.to_le_bytes()).unwrap();
+            let pixel = [expected, expected, expected, 0x3c00]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+            assert_eq!(decoded, pixel.repeat(6));
+        }
+        assert!(decompress_bc6h_rgba16(ETextureFormat::BptcUfloat, 0, 4, &[0; 16]).is_err());
+        assert!(decompress_bc6h_rgba16(ETextureFormat::BptcUfloat, 4, 4, &[0; 15]).is_err());
+        assert!(decompress_bc6h_rgba16(ETextureFormat::RgbaBc1Unorm, 4, 4, &[0; 8]).is_err());
+    }
+
+    #[test]
+    fn compressed_array_mips_keep_logical_sizes_and_layer_order() {
+        // Two 8x4 BC1 layers: each layer occupies 16+8+8+8 bytes.
+        let mut header_bytes = [5u32, 20, 8, 4, 2, 0, 0, 4, 32, 16, 16, 16, 0]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        header_bytes.extend([1, 1, 0, 0, 0, 255]);
+        let head: STextureHeader = Cursor::new(header_bytes).read_le().unwrap();
+        let texture = TextureData::<LittleEndian> { head, data: vec![0; 80], _marker: PhantomData };
+        let slices = slice_texture(&texture).unwrap();
+        assert_eq!(slices.iter().map(|m| (m[0].width, m[0].height)).collect::<Vec<_>>(), [
+            (8, 4),
+            (4, 2),
+            (2, 1),
+            (1, 1)
+        ]);
+        assert_eq!(slices.iter().map(|m| m[0].data_range.clone()).collect::<Vec<_>>(), [
+            0..16,
+            16..24,
+            24..32,
+            32..40
+        ]);
+        assert_eq!(slices.iter().map(|m| m[1].data_range.clone()).collect::<Vec<_>>(), [
+            40..56,
+            56..64,
+            64..72,
+            72..80
+        ]);
+        for mip in slices {
+            for slice in mip {
+                let image = decompress_image(
+                    texture.head.format,
+                    slice.width,
+                    slice.height,
+                    &texture.data[slice.data_range],
+                )
+                .unwrap();
+                assert_eq!((image.width(), image.height()), (slice.width, slice.height));
+            }
+        }
+    }
 }

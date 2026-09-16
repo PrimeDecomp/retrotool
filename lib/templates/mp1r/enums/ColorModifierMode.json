@@ -1,0 +1,28 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ColorModifierMode",
+  "description": "Serialized CRCs from table7101d16c54; these are not the runtime integer values.",
+  "type": "enum",
+  "values": [
+    {
+      "name": "General Color Effect",
+      "value": "0x6e1abcf4",
+      "description": "Runtime0, also the fallback for absent or unknown CRC."
+    },
+    {
+      "name": "Baked Lighting Modulation",
+      "value": "0xd2fd45bc",
+      "description": "Runtime1; applies to linked RoomSettings components."
+    },
+    {
+      "name": "Render Color Effect 0",
+      "value": "0x209ea819",
+      "description": "Runtime2."
+    },
+    {
+      "name": "Render Color Effect 1",
+      "value": "0x586d50a4",
+      "description": "Runtime3."
+    }
+  ]
+}

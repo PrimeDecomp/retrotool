@@ -1,3 +1,6 @@
+#import "mpr_layered.wgsl"
+#import "mpr_lighting.wgsl"
+
 #import bevy_pbr::mesh_view_bindings
 #import bevy_pbr::mesh_bindings
 
@@ -36,6 +39,10 @@ struct CustomMaterial {
     metallic_map_l2: vec4<f32>,
     emissive_uv: u32,
     emissive_color: vec4<f32>,
+    emissive_unmasked_color: vec4<f32>,
+    layer_smoothness: f32,
+    layer_scales: vec4<f32>,
+    light_scale: f32,
 };
 @group(1) @binding(0)
 var<uniform> material: CustomMaterial;
@@ -144,6 +151,9 @@ struct VertexOutput {
 #ifdef VERTEX_TANGENTS_2
     @location(7) world_tangent_2: vec4<f32>,
 #endif
+#ifdef VERTEX_UVS_3
+    @location(9) uv_3: vec2<f32>,
+#endif
 #ifdef VERTEX_COLORS
     @location(8) color: vec4<f32>,
 #endif
@@ -164,11 +174,18 @@ fn vertex(in: VertexInput) -> VertexOutput {
 #endif
     out.position = mesh_position_local_to_clip(model, position);
     out.world_position = mesh_position_local_to_world(model, position);
+#ifdef MPR_RECOVERED_SURFACE
+    let mpr_frame = mpr_vertex_frame_to_world(model, view.view, view.inverse_view);
+#endif
 #ifdef VERTEX_NORMALS
 #ifdef SKINNED
     out.world_normal = skin_normals(model, in.normal);
 #else
+#ifdef MPR_RECOVERED_SURFACE
+    out.world_normal = mpr_frame * in.normal;
+#else
     out.world_normal = mesh_normal_local_to_world(in.normal);
+#endif
 #endif
 #endif
 #ifdef VERTEX_UVS_0
@@ -180,17 +197,31 @@ fn vertex(in: VertexInput) -> VertexOutput {
 #ifdef VERTEX_UVS_2
     out.uv_2 = in.uv_2;
 #endif
+#ifdef VERTEX_UVS_3
+    out.uv_3 = in.uv_3;
+#endif
 #ifdef VERTEX_TANGENTS_0
+#ifdef MPR_RECOVERED_SURFACE
+    out.world_tangent_0 = mpr_vertex_tangent(mpr_frame, model, in.tangent_0);
+#else
     out.world_tangent_0 = mesh_tangent_local_to_world(mesh.model, in.tangent_0);
 #endif
+#endif
 #ifdef VERTEX_TANGENTS_1
+#ifdef MPR_RECOVERED_SURFACE
+    out.world_tangent_1 = mpr_vertex_tangent(mpr_frame, model, in.tangent_1);
+#else
     out.world_tangent_1 = mesh_tangent_local_to_world(mesh.model, in.tangent_1);
+#endif
 #endif
 #ifdef VERTEX_TANGENTS_2
     out.world_tangent_2 = mesh_tangent_local_to_world(mesh.model, in.tangent_2);
 #endif
 #ifdef VERTEX_COLORS
     out.color = in.color;
+#ifdef MPR_RECOVERED_SURFACE
+    out.color = mpr_vertex_color(in.color);
+#endif
 #endif
     return out;
 }
@@ -211,6 +242,9 @@ fn in_uv(in: ptr<function, VertexOutput>, idx: u32) -> vec2<f32> {
         case 2u: {
             return (*in).uv_2;
         }
+#endif
+#ifdef VERTEX_UVS_3
+        case 3u: { return (*in).uv_3; }
 #endif
         default: {
             return vec2<f32>(0.0);
@@ -235,10 +269,8 @@ fn sample_base_color(in: ptr<function, VertexOutput>) -> vec4<f32> {
         base_color_sampler_2,
         in_uv(in, material.base_color_uv_2)
     ) * material.base_color_l2;
-    color /= material.base_color_l0
-        + material.base_color_l1
-        + material.base_color_l2;
-    return color;
+    let weights = material.base_color_l0 + material.base_color_l1 + material.base_color_l2;
+    return select(vec4<f32>(1.0), color / max(weights, vec4<f32>(1e-20)), weights > vec4<f32>(0.0));
 }
 
 fn sample_normal_map(in: ptr<function, VertexOutput>) -> vec4<f32> {
@@ -258,10 +290,8 @@ fn sample_normal_map(in: ptr<function, VertexOutput>) -> vec4<f32> {
         normal_map_sampler_2,
         in_uv(in, material.normal_map_uv_2)
     ) * material.normal_map_l2;
-    color /= material.normal_map_l0
-        + material.normal_map_l1
-        + material.normal_map_l2;
-    return color;
+    let weights = material.normal_map_l0 + material.normal_map_l1 + material.normal_map_l2;
+    return select(vec4<f32>(0.5, 0.5, 1.0, 1.0), color / max(weights, vec4<f32>(1e-20)), weights > vec4<f32>(0.0));
 }
 
 fn sample_metallic_map(in: ptr<function, VertexOutput>) -> vec4<f32> {
@@ -281,10 +311,8 @@ fn sample_metallic_map(in: ptr<function, VertexOutput>) -> vec4<f32> {
         metallic_map_sampler_2,
         in_uv(in, material.metallic_map_uv_2)
     ) * material.metallic_map_l2;
-    color /= material.metallic_map_l0
-        + material.metallic_map_l1
-        + material.metallic_map_l2;
-    return color;
+    let weights = material.metallic_map_l0 + material.metallic_map_l1 + material.metallic_map_l2;
+    return select(vec4<f32>(1.0, 1.0, 0.0, 1.0), color / max(weights, vec4<f32>(1e-20)), weights > vec4<f32>(0.0));
 }
 
 fn apply_normal_mapping(
@@ -313,7 +341,7 @@ fn apply_normal_mapping(
     var Nt = sample_normal_map(in).rgb;
     // Only use the xy components and derive z for 2-component normal maps.
     Nt = vec3<f32>(Nt.rg * 2.0 - 1.0, 0.0);
-    Nt.z = sqrt(1.0 - Nt.x * Nt.x - Nt.y * Nt.y);
+    Nt.z = sqrt(max(0.0, 1.0 - Nt.x * Nt.x - Nt.y * Nt.y));
     // Normal maps authored for DirectX require flipping the y component
     // Nt.y = -Nt.y;
     // NOTE: The mikktspace method of normal mapping applies maps the tangent-space normal from
@@ -369,6 +397,8 @@ fn standard_material_new() -> StandardMaterial {
 struct PbrInput {
     material: StandardMaterial,
     occlusion: f32,
+    surface_diffuse: vec3<f32>,
+    surface_f0: vec3<f32>,
     frag_coord: vec4<f32>,
     world_position: vec4<f32>,
     // Normalized world normal used for shadow mapping as normal-mapping is not used for shadow
@@ -388,6 +418,8 @@ fn pbr_input_new() -> PbrInput {
 
     pbr_input.material = standard_material_new();
     pbr_input.occlusion = 1.0;
+    pbr_input.surface_diffuse = vec3<f32>(0.0);
+    pbr_input.surface_f0 = vec3<f32>(0.0);
 
     pbr_input.frag_coord = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     pbr_input.world_position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -418,6 +450,28 @@ fn calculate_view(
     return V;
 }
 
+// Viewer light placement/intensity/range remain Bevy inputs. Use the traced
+// local-light BRDF for these preview lights, with CLight's default roughness0.
+// Runtime MPR records instead use mpr_local_light's cubic/linear cone falloff.
+fn mpr_preview_local_light(in: PbrInput, light_id: u32, spot: bool) -> vec3<f32> {
+    let light = point_lights.data[light_id];
+    let delta = light.position_radius.xyz - in.world_position.xyz;
+    let direction = normalize(delta);
+    var attenuation = getDistanceAttenuation(dot(delta, delta), light.color_inverse_square_range.w);
+    if (spot) {
+        var spot_direction = vec3<f32>(light.light_custom_data.x, 0.0, light.light_custom_data.y);
+        spot_direction.y = sqrt(max(0.0, 1.0 - dot(spot_direction, spot_direction)));
+        if ((light.flags & POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE) != 0u) {
+            spot_direction.y = -spot_direction.y;
+        }
+        let cone = clamp(dot(-spot_direction, direction) * light.light_custom_data.z + light.light_custom_data.w, 0.0, 1.0);
+        attenuation *= cone * cone;
+    }
+    return mpr_combine_direct(mpr_direct_light(in.N, in.V, direction,
+        in.material.perceptual_roughness, in.surface_f0,
+        light.color_inverse_square_range.rgb * attenuation, 0.0), in.surface_diffuse);
+}
+
 fn pbr(
     in: PbrInput,
 ) -> vec4<f32> {
@@ -439,6 +493,10 @@ fn pbr(
     // Neubelt and Pettineo 2013, "Crafting a Next-gen Material Pipeline for The Order: 1886"
     let NdotV = max(dot(in.N, in.V), 0.0001);
 
+#ifdef MPR_RECOVERED_SURFACE
+    let F0 = in.surface_f0;
+    let diffuse_color = in.surface_diffuse;
+#else
     // Remapping [0,1] reflectance to F0
     // See https://google.github.io/filament/Filament.html#materialsystem/parameterization/remapping
     let reflectance = in.material.reflectance;
@@ -446,6 +504,7 @@ fn pbr(
 
     // Diffuse strength inversely related to metallicity
     let diffuse_color = output_color.rgb * (1.0 - metallic);
+#endif
 
     let R = reflect(-in.V, in.N);
 
@@ -470,7 +529,11 @@ fn pbr(
 //                && (point_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
 //            shadow = fetch_point_shadow(light_id, in.world_position, in.world_normal);
 //        }
+#ifdef MPR_RECOVERED_SURFACE
+        let light_contrib = mpr_preview_local_light(in, light_id, false);
+#else
         let light_contrib = point_light(in.world_position.xyz, light_id, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+#endif
         direct_light += light_contrib * shadow;
     }
 
@@ -482,7 +545,11 @@ fn pbr(
 //                && (point_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
 //            shadow = fetch_spot_shadow(light_id, in.world_position, in.world_normal);
 //        }
+#ifdef MPR_RECOVERED_SURFACE
+        let light_contrib = mpr_preview_local_light(in, light_id, true);
+#else
         let light_contrib = spot_light(in.world_position.xyz, light_id, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+#endif
         direct_light += light_contrib * shadow;
     }
 
@@ -494,7 +561,14 @@ fn pbr(
 //                && (lights.directional_lights[i].flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
 //            shadow = fetch_directional_shadow(i, in.world_position, in.world_normal, view_z);
 //        }
+#ifdef MPR_RECOVERED_SURFACE
+        let preview_light = lights.directional_lights[i];
+        var light_contrib = mpr_combine_direct(mpr_direct_light(in.N, in.V,
+            preview_light.direction_to_light.xyz, perceptual_roughness, F0,
+            preview_light.color.rgb, 0.0), diffuse_color);
+#else
         var light_contrib = directional_light(i, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+#endif
 //#ifdef DIRECTIONAL_LIGHT_SHADOW_MAP_DEBUG_CASCADES
 //        light_contrib = cascade_debug_visualization(light_contrib, i, view_z);
 //#endif
@@ -510,7 +584,12 @@ fn pbr(
     indirect_light += (environment_light.diffuse * occlusion) + environment_light.specular;
 #endif
 
+#ifdef MPR_RECOVERED_SURFACE
+    // These two permutations add ICNC + ICMC independently of output alpha.
+    let emissive_light = emissive.rgb;
+#else
     let emissive_light = emissive.rgb * output_color.a;
+#endif
 
     // Total light
     output_color = vec4<f32>(
@@ -522,28 +601,71 @@ fn pbr(
 }
 
 @fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     var in2: VertexOutput = in;
 
     var pbr_input = pbr_input_new();
+#ifdef MPR_RECOVERED_SURFACE
+    let primary = textureSample(base_color_texture_0, base_color_sampler_0, in_uv(&in2, material.base_color_uv_0));
+#ifdef MPR_RECOVERED_LAYERED
+    let overlay = textureSample(base_color_texture_1, base_color_sampler_1, in_uv(&in2, material.base_color_uv_1));
+    let layer_weight = mpr_layer_weight(primary.a, overlay.a, in.color.a, material.layer_smoothness, material.layer_scales);
+    let base_sample = mix(primary, overlay, layer_weight);
+    let alpha = mpr_surface_alpha(base_sample.a, material.base_color.a, in.color.a, false);
+#else
+    let base_sample = primary;
+    let alpha = mpr_surface_alpha(base_sample.a, material.base_color.a, in.color.a, true);
+#endif
+    pbr_input.material.base_color = vec4<f32>(base_sample.rgb, alpha);
+#else
     pbr_input.material.base_color = sample_base_color(&in2) * material.base_color;
+#endif
 //#ifdef VERTEX_COLORS
 //    pbr_input.material.base_color *= in.color;
 //#endif
 
     pbr_input.frag_coord = in.position;
     pbr_input.world_position = in.world_position;
+#ifdef VERTEX_NORMALS
     pbr_input.world_normal = in.world_normal;
+#endif
     pbr_input.is_orthographic = view.projection[3].w == 1.0;
 
+#ifdef MPR_RECOVERED_SURFACE
+    pbr_input.material.emissive = material.emissive_color + material.emissive_unmasked_color;
+#else
     pbr_input.material.emissive = textureSample(
         emissive_texture,
         emissive_sampler,
         in_uv(&in2, material.emissive_uv)
     ) * material.emissive_color;
+#endif
 
+#ifdef MPR_RECOVERED_SURFACE
+#ifdef MPR_RECOVERED_LAYERED
+    let metl_map = mix(
+        textureSample(metallic_map_texture_0, metallic_map_sampler_0, in_uv(&in2, material.metallic_map_uv_0)),
+        textureSample(metallic_map_texture_1, metallic_map_sampler_1, in_uv(&in2, material.metallic_map_uv_1)), layer_weight);
+    pbr_input.N = mpr_layer_normal(
+        textureSample(normal_map_texture_0, normal_map_sampler_0, in_uv(&in2, material.normal_map_uv_0)).rg,
+        textureSample(normal_map_texture_1, normal_map_sampler_1, in_uv(&in2, material.normal_map_uv_1)).rg,
+        layer_weight, in.world_normal, in.world_tangent_0, in.world_tangent_1);
+#else
+    let metl_map = textureSample(metallic_map_texture_0, metallic_map_sampler_0, in_uv(&in2, material.metallic_map_uv_0));
+    pbr_input.N = mpr_single_normal(
+        textureSample(normal_map_texture_0, normal_map_sampler_0, in_uv(&in2, material.normal_map_uv_0)).rg,
+        in.world_normal, in.world_tangent_0);
+#endif
+    let channels = mpr_surface_channels(base_sample.rgb, metl_map.rgb, material.base_color.rgb,
+        in.color.rgb, material.light_scale, front_facing);
+    pbr_input.surface_diffuse = channels.diffuse;
+    pbr_input.surface_f0 = channels.f0;
+    pbr_input.material.perceptual_roughness = channels.roughness;
+    pbr_input.material.metallic = metl_map.b;
+    pbr_input.N *= sign(mpr_face_scale(material.light_scale, front_facing));
+#else
     let metl_map = sample_metallic_map(&in2);
-    pbr_input.material.base_color *= metl_map.r; // AO
+    pbr_input.material.base_color *= metl_map.r; // Legacy approximation.
     pbr_input.material.perceptual_roughness = metl_map.g;
     pbr_input.material.metallic = metl_map.b;
 
@@ -555,6 +677,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         &in2,
 #endif
     );
+#endif
 #endif
     pbr_input.V = calculate_view(in.world_position, pbr_input.is_orthographic);
 

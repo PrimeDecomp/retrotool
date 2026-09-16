@@ -1,0 +1,93 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "LightStatic",
+  "description": "SLdrLightStatic; native loader710078d0ec. Most serialized definitions are baking inputs. Runtime node creation requires Runtime Enabled and Light Type0..3.",
+  "type": "property_list",
+  "properties": {
+    "0x52d4c579": {
+      "name": "Light Type",
+      "type": "i32",
+      "description": "Default0: ambient;1 directional;2 point;3 spot;4 area;5/6 square variants. Only0..3 can create runtime nodes."
+    },
+    "0x6c1d6c28": {
+      "name": "Runtime Enabled",
+      "type": "bool",
+      "description": "Native default false. Separate from entity activation."
+    },
+    "0xf10ea1b7": {
+      "name": "Baked",
+      "type": "bool",
+      "description": "Native default true. Becomes scene-node flag bit0."
+    },
+    "0x163bbc26": {
+      "name": "Unknown 16A",
+      "type": "bool",
+      "description": "Native default false; runtime field0x16a."
+    },
+    "0x7c3cd2ce": {
+      "name": "Render Target Scene",
+      "type": "enum",
+      "enum": "RenderTargetScene"
+    },
+    "0x8b76d48e": {
+      "name": "LightColors",
+      "type": "struct",
+      "struct": "LightColors"
+    },
+    "0xdd21d666": {
+      "name": "LumaIntensity",
+      "type": "struct",
+      "struct": "LumaIntensity"
+    },
+    "0xebae52b2": {
+      "name": "LightDistanceAttenuation",
+      "type": "struct",
+      "struct": "LightDistanceAttenuation"
+    },
+    "0x664b1a7c": {
+      "name": "LightAngleAttenuation",
+      "type": "struct",
+      "struct": "LightAngleAttenuation"
+    },
+    "0xf939c307": {
+      "name": "LightFlags",
+      "type": "struct",
+      "struct": "LightFlags"
+    },
+    "0xa35b13e6": {
+      "name": "LightShape",
+      "type": "unknown",
+      "description": "Native nested loader identified; payload retained without interpretation."
+    },
+    "0x21f525ea": {
+      "name": "LightReflectionProbeInfluence",
+      "type": "unknown",
+      "description": "Native nested loader identified; payload retained without interpretation."
+    },
+    "0x3a6a74af": {
+      "name": "LightingSetFlags",
+      "type": "unknown",
+      "description": "Native nested loader identified; payload retained without interpretation."
+    },
+    "0x85d7c41d": {
+      "name": "LightGobo",
+      "type": "unknown",
+      "description": "Native nested loader identified; payload retained without interpretation."
+    },
+    "0x6db05694": {
+      "name": "PointShadowMapData",
+      "type": "unknown",
+      "description": "Native nested loader identified; payload retained without interpretation."
+    },
+    "0x510d27c6": {
+      "name": "SpotShadowMapData",
+      "type": "unknown",
+      "description": "Native nested loader identified; payload retained without interpretation."
+    },
+    "0xd1714ee9": {
+      "name": "DirectionalShadowMapData",
+      "type": "unknown",
+      "description": "Native nested loader identified; payload retained without interpretation."
+    }
+  }
+}

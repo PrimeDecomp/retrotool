@@ -40,8 +40,10 @@ impl<O: ByteOrder> FormDescriptor<O> {
         let header = Self::ref_from_prefix(data).ok_or_else(|| anyhow!("Invalid RFRM header"))?;
         ensure!(header.magic == K_CHUNK_RFRM);
         let start = size_of::<Self>();
-        let slice = &data[start..(start + header.size.get() as usize)];
-        let remain = &data[(start + header.size.get() as usize)..];
+        let size = usize::try_from(header.size.get())?;
+        let end = start.checked_add(size).ok_or_else(|| anyhow!("RFRM size overflow"))?;
+        let slice = data.get(start..end).ok_or_else(|| anyhow!("Truncated RFRM payload"))?;
+        let remain = &data[end..];
         Ok((header, slice, remain))
     }
 

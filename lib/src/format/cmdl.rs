@@ -302,10 +302,12 @@ pub struct SMeshLoadInformation {
     pub mesh_count: u32,
     #[br(count = mesh_count)]
     pub meshes: Vec<CRenderMesh>,
+    /// Four EMeshClass values per byte, least-significant pair first.
     #[br(count = mesh_count.div_ceil(4))]
-    pub unk_data_1: Vec<u8>,
+    pub mesh_classes: Vec<u8>,
+    /// Eight two-sided flags per byte, least-significant bit first.
     #[br(count = mesh_count.div_ceil(8))]
-    pub unk_data_2: Vec<u8>,
+    pub two_sided_flags: Vec<u8>,
     #[bw(try_calc = shorts.len().try_into())]
     pub short_count: u32,
     #[br(count = short_count)]
@@ -318,6 +320,24 @@ pub struct SMeshLoadInformation {
     pub has_lod_rules: u32,
     #[br(if(has_lod_rules == 1), count(lod_count as usize))]
     pub lod_rules: Vec<SRenderModelLODRule>,
+}
+
+impl SMeshLoadInformation {
+    /// CModelRenderableDrawHelper::SetupStateForMesh_Unsorted, 0x71001f8870.
+    pub fn mesh_class(&self, index: usize) -> Option<u8> {
+        if index >= self.meshes.len() {
+            return None;
+        }
+        self.mesh_classes.get(index / 4).map(|b| (b >> ((index % 4) * 2)) & 3)
+    }
+
+    /// The draw helper disables face culling for this mesh when the bit is set.
+    pub fn is_two_sided(&self, index: usize) -> Option<bool> {
+        if index >= self.meshes.len() {
+            return None;
+        }
+        self.two_sided_flags.get(index / 8).map(|b| (b >> (index % 8)) & 1 != 0)
+    }
 }
 
 #[binrw]
@@ -342,18 +362,92 @@ pub struct CRenderMesh {
 pub struct SModelHeader {
     pub unk: u32,
     pub bounds: CAABox,
-    // pub data_source_count: u32,
-    // pub data_sources: Vec<DataSourceLoader>,
+    /// Preserve the data-source count, records and optional custom-data tail.
+    /// Their formats differ by model kind; this is not a new length-prefixed blob.
+    #[br(parse_with = binrw::until_eof)]
+    pub data_sources: Vec<u8>,
+}
+
+/// SMDL SKHD, loaded by NModelFormat::SSkinnedModelHeader at71001c370c.
+/// HEAD remains the independent bounds/data-source header following SKHD.
+#[binrw]
+#[derive(Clone, Debug)]
+pub struct SSkinnedModelHeader {
+    pub unknown0: u32,
+    /// Passed through CRenderSkinnedModel+100 to CSkinningMaterialData's initial
+    /// identity palette constructor (UpdateModelReadiness710022bf88).
+    pub bone_count: u32,
+    pub unknown8: u32,
+    pub mesh_bit_count: u32,
+    #[bw(try_calc = mesh_bits.len().try_into())]
+    pub mesh_word_count: u32,
+    #[br(count = mesh_word_count)]
+    pub mesh_bits: Vec<u32>,
+    #[bw(try_calc = mesh_visibility_groups.len().try_into())]
+    pub mesh_data_count: u32,
+    #[br(count = mesh_data_count)]
+    pub mesh_visibility_groups: Vec<u8>,
+}
+
+impl SSkinnedModelHeader {
+    /// Native per-instance ShouldRenderMesh71002ea810: an unmarked mesh is visible;
+    /// a marked mesh tests a supplied visibility mask at its byte group &31.
+    /// The native lookup truncates the mesh index to16 bits.
+    pub fn mesh_visible(&self, index: usize, visibility_mask: u32) -> Result<bool> {
+        let index = index & 0xffff;
+        ensure!(index < self.mesh_bit_count as usize, "Skinned mesh index out of bounds");
+        let word = self
+            .mesh_bits
+            .get(index / 32)
+            .ok_or_else(|| anyhow::anyhow!("Truncated skinned mesh bit vector"))?;
+        if word & (1 << (index & 31)) == 0 {
+            return Ok(true);
+        }
+        let group = self
+            .mesh_visibility_groups
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("Missing skinned mesh visibility group"))?;
+        Ok(visibility_mask & (1 << (group & 31)) != 0)
+    }
 }
 
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct SMaterialChunk {
-    pub unk: u32,
+    /// LoadMaterialCacheHeader runs once for shared data, then once per material.
+    #[bw(try_calc = shared_data.len().try_into())]
+    pub shared_data_count: u32,
+    #[br(count = shared_data_count)]
+    pub shared_data_types: Vec<SMaterialType>,
+    #[br(count = shared_data_count)]
+    pub shared_data: Vec<CMaterialData>,
     #[bw(try_calc = materials.len().try_into())]
     pub material_count: u32,
     #[br(count = material_count)]
     pub materials: Vec<CMaterialCache>,
+}
+
+impl SMaterialChunk {
+    /// Static model data in lookup order: per-material values, then shared data.
+    /// CRenderModel::SetupMaterialForRenderMesh appends these after draw-context
+    /// providers. Duplicate IDs in the shared block cannot override local values.
+    pub fn material_values(&self, index: usize) -> Result<Vec<&CMaterialData>> {
+        let material = self
+            .materials
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("Invalid material index {index}"))?;
+        let mut seen = [false; 116];
+        Ok(material
+            .data
+            .iter()
+            .chain(&self.shared_data)
+            .filter(|data| {
+                let first = !seen[data.data_id as usize];
+                seen[data.data_id as usize] = true;
+                first
+            })
+            .collect())
+    }
 }
 
 #[binrw]
@@ -364,20 +458,24 @@ pub struct CMaterialCache {
     pub name: String,
     #[br(map = Uuid::from_bytes_le)]
     #[bw(map = Uuid::to_bytes_le)]
-    pub shader_id: Uuid,
+    /// Cooked MTRL resource GUID (NMaterialFormat::build_tag).
+    pub material_resource_id: Uuid,
     #[br(map = Uuid::from_bytes_le)]
     #[bw(map = Uuid::to_bytes_le)]
-    pub unk_guid: Uuid,
-    pub unk1: u32,
-    pub unk2: u32,
-    #[bw(try_calc = types.len().try_into())]
-    pub type_count: u32,
-    #[br(count = type_count)]
-    pub types: Vec<FourCC>,
-    #[bw(try_calc = render_types.len().try_into())]
-    pub render_type_count: u32,
-    #[br(count = render_type_count)]
-    pub render_types: Vec<SMaterialRenderTypes>,
+    /// Material implementation GUID, matching the embedded archive's material ID.
+    pub material_id: Uuid,
+    /// EMaterialFlag bit mask supplied to CMaterialInstanceDataBuilder::Finalize.
+    pub flags: u32,
+    /// External variable binding-key material-set hash; runtime resource +0x48.
+    pub material_set_hash: u32,
+    #[bw(try_calc = traits.len().try_into())]
+    pub trait_count: u32,
+    #[br(count = trait_count)]
+    pub traits: Vec<FourCC>,
+    #[bw(try_calc = variable_descs.len().try_into())]
+    pub variable_desc_count: u32,
+    #[br(count = variable_desc_count)]
+    pub variable_descs: Vec<CMaterialVariableDesc>,
     #[bw(try_calc = data_types.len().try_into())]
     pub data_count: u32,
     #[br(count = data_count)]
@@ -386,13 +484,33 @@ pub struct CMaterialCache {
     pub data: Vec<CMaterialData>,
 }
 
+impl CMaterialCache {
+    /// CVariableBindingKey::Generate (0x71001fd318): high32 is material-set
+    /// hash, low32 is the variable's FourCC in conventional display order.
+    pub fn variable_binding_key(&self, name: FourCC) -> u64 {
+        (u64::from(self.material_set_hash) << 32) | u64::from(u32::from_be_bytes(name.0))
+    }
+
+    /// CMaterialInstanceResource::GetVariableDesc(key), 0x71001fd0cc.
+    pub fn variable_desc(&self, key: u64) -> Option<&CMaterialVariableDesc> {
+        if key >> 32 != u64::from(self.material_set_hash) {
+            return None;
+        }
+        self.variable_descs.iter().find(|d| u32::from_be_bytes(d.name.0) == key as u32)
+    }
+}
+
 #[binrw]
 #[derive(Clone, Debug)]
-pub struct SMaterialRenderTypes {
+/// CVariableDesc stream constructor 0x71001fccb8. Ten bytes on disk;
+/// runtime compresses data_id to u16, making the in-memory record eight bytes.
+pub struct CMaterialVariableDesc {
+    pub name: FourCC,
     pub data_id: FourCC,
-    pub data_type: FourCC,
-    pub flag1: u8,
-    pub flag2: u8,
+    /// External variable type byte, a different enum from EMaterialDataType.
+    pub data_type: u8,
+    /// 0xff is the default; other values select a destination vector channel.
+    pub packing_rule: u8,
 }
 
 #[binrw]
@@ -416,7 +534,7 @@ pub struct CMaterialData {
 #[derive(Clone, Debug)]
 pub enum CMaterialDataInner {
     #[br(pre_assert(ty == EMaterialDataType::Texture))]
-    Texture(CMaterialTextureTokenData),
+    Texture(#[br(args { always_read_usage: true })] CMaterialTextureTokenData),
     #[br(pre_assert(ty == EMaterialDataType::Color))]
     Color(CColor4f),
     #[br(pre_assert(ty == EMaterialDataType::Scalar))]
@@ -432,27 +550,44 @@ pub enum CMaterialDataInner {
 }
 
 #[binrw]
+#[br(import { always_read_usage: bool = false })]
 #[derive(Clone, Debug)]
 pub struct CMaterialTextureTokenData {
     #[br(map = Uuid::from_bytes_le)]
     #[bw(map = Uuid::to_bytes_le)]
     pub id: Uuid,
-    #[br(if(!id.is_nil()))]
+    // Layer slots omit usage for nil IDs; top-level TXTR values always store it.
+    #[br(if(always_read_usage || !id.is_nil()))]
     pub usage: Option<STextureUsageInfo>,
 }
 
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct CLayeredTextureBaseData {
-    pub unk: u32,
+    pub blend_control: ELayeredTextureBlend,
+    // SBlendRegs: shader blend coefficients, not three independent texture tints.
     pub colors: [CColor4f; 3],
+    // Bits 0/1 request the one/two tangent stream shader variants, respectively.
     pub flags: u8,
+}
+
+/// CLayeredTextureBaseData::EBlendControl. See CFeatureTextureLayered::SelectOption
+/// at 0x710016f8f8 in MPR; these select shader features, not fixed function blending.
+#[binrw]
+#[brw(repr(u32))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ELayeredTextureBlend {
+    Embedded = 0,
+    Separate = 1,
+    External = 2,
+    Disabled = 3,
 }
 
 #[binrw]
 #[derive(Clone, Debug)]
 pub struct CLayeredTextureData {
     pub base: CLayeredTextureBaseData,
+    // Texture0, Texture1, BlendTexture (CFeatureTextureLayered::ESemanticId).
     pub textures: [CMaterialTextureTokenData; 3],
 }
 
@@ -460,7 +595,9 @@ pub struct CLayeredTextureData {
 #[derive(Clone, Debug)]
 pub struct STextureUsageInfo {
     pub tex_coord: u32,
+    /// -1 inherits both filters; 0/1 overrides min, mag AND mip filtering.
     pub filter: i32,
+    /// Wrap overrides: -1 inherits the corresponding TXTR header value.
     pub wrap_x: i32,
     pub wrap_y: i32,
     pub wrap_z: i32,
@@ -591,6 +728,7 @@ pub enum EMaterialDataId {
     PTAI = 48,
     #[brw(magic(b"PCMD"))]
     PCMD = 49,
+    /// Layer height scales/offsets: primary scale, primary offset, overlay scale, overlay offset.
     #[brw(magic(b"BSAO"))]
     BSAO = 50,
     #[brw(magic(b"CCH0"))]
@@ -650,6 +788,7 @@ pub enum EMaterialDataId {
     SPCP = 76,
     #[brw(magic(b"INDS"))]
     INDS = 77,
+    /// PhysicallyBased texture height-blend smoothness.
     #[brw(magic(b"BLSM"))]
     BLSM = 78,
     #[brw(magic(b"LITS"))]
@@ -731,6 +870,27 @@ pub enum EMaterialDataId {
 }
 
 impl EMaterialDataId {
+    /// Decode the four-byte name used in featured-material data ID lists.
+    pub fn from_fourcc(name: &str) -> Result<Self> {
+        ensure!(name.len() == 4, "Material data ID must contain four bytes");
+        Ok(Cursor::new(name.as_bytes()).read_type(Endian::Little)?)
+    }
+
+    /// ID categories tested by the engine at 0x7100161cd0..0x7100161d40.
+    /// These classify the ID itself, independently of its serialized value tag.
+    pub fn data_type(self) -> EMaterialDataType {
+        match self as u32 {
+            1..=31 => EMaterialDataType::Texture,
+            32..=64 => EMaterialDataType::Color,
+            65..=72 => EMaterialDataType::Int1,
+            73..=74 => EMaterialDataType::Int4,
+            75..=86 => EMaterialDataType::Scalar,
+            87..=88 => EMaterialDataType::Mat4,
+            89..=115 => EMaterialDataType::Complex,
+            _ => unreachable!(),
+        }
+    }
+
     pub fn is_texture_layered(self) -> bool {
         matches!(self, EMaterialDataId::BCRL | EMaterialDataId::MTLL | EMaterialDataId::NRML)
     }
@@ -817,6 +977,7 @@ fn decompress_gpu_buffers(
 #[derive(Debug, Clone)]
 pub struct ModelData<O: ByteOrder> {
     pub head: SModelHeader,
+    pub skinned_header: Option<SSkinnedModelHeader>,
     pub mtrl: SMaterialChunk,
     pub mesh: SMeshLoadInformation,
     pub vbuf: SVertexBufferInfoSection,
@@ -852,6 +1013,7 @@ where O: ByteOrder + 'static
         let idx_buffers = decompress_gpu_buffers(data, &meta.read_info, &meta.idx_buffer_info)?;
 
         let mut head: Option<SModelHeader> = None;
+        let mut skinned_header = None;
         let mut mtrl: Option<SMaterialChunk> = None;
         let mut mesh: Option<SMeshLoadInformation> = None;
         let mut vbuf: Option<SVertexBufferInfoSection> = None;
@@ -860,8 +1022,14 @@ where O: ByteOrder + 'static
             cmdl_data,
             |desc, data| {
                 match desc.id {
-                    K_CHUNK_HEAD | K_CHUNK_SKHD | K_CHUNK_WDHD => {
+                    K_CHUNK_HEAD | K_CHUNK_WDHD => {
                         head = Some(Cursor::new(data).read_type(Endian::Little)?)
+                    }
+                    K_CHUNK_SKHD => {
+                        let mut cursor = Cursor::new(data);
+                        skinned_header =
+                            Some(cursor.read_type::<SSkinnedModelHeader>(Endian::Little)?);
+                        ensure!(cursor.position() as usize == data.len(), "Trailing SKHD data");
                     }
                     K_CHUNK_MTRL => mtrl = Some(Cursor::new(data).read_type(Endian::Little)?),
                     K_CHUNK_MESH => mesh = Some(Cursor::new(data).read_type(Endian::Little)?),
@@ -887,6 +1055,150 @@ where O: ByteOrder + 'static
         // log::debug!("VBUF: {vbuf:#?}");
         // log::debug!("IBUF: {ibuf:#?}");
 
-        Ok(Self { head, mtrl, mesh, vbuf, ibuf, vtx_buffers, idx_buffers, _marker: PhantomData })
+        ensure!(cmdl_desc.id != K_FORM_SMDL || skinned_header.is_some(), "SMDL missing SKHD");
+        Ok(Self {
+            head,
+            skinned_header,
+            mtrl,
+            mesh,
+            vbuf,
+            ibuf,
+            vtx_buffers,
+            idx_buffers,
+            _marker: PhantomData,
+        })
+    }
+}
+
+#[cfg(test)]
+mod material_tests {
+    use binrw::BinWriterExt;
+
+    #[test]
+    fn packed_mesh_class_and_two_sided_fields_cross_byte_boundaries() {
+        let mut bytes = 9u32.to_le_bytes().to_vec();
+        bytes.extend([0; 9 * 16]); // Nine serialized CRenderMesh records.
+        bytes.extend([0xe4, 0x1b, 0x02]);
+        bytes.extend([0xa5, 0x01]);
+        bytes.extend([0; 9]); // No mesh-index list, LODs, or LOD rules.
+        let mut cursor = Cursor::new(bytes);
+        let info: SMeshLoadInformation = cursor.read_le().unwrap();
+        assert_eq!(cursor.position(), cursor.get_ref().len() as u64);
+        assert_eq!((0..9).map(|i| info.mesh_class(i).unwrap()).collect::<Vec<_>>(), [
+            0, 1, 2, 3, 3, 2, 1, 0, 2
+        ]);
+        assert_eq!((0..9).map(|i| info.is_two_sided(i).unwrap()).collect::<Vec<_>>(), [
+            true, false, true, false, false, true, false, true, true
+        ]);
+        assert_eq!(info.mesh_class(9), None);
+        assert_eq!(info.is_two_sided(9), None);
+    }
+
+    use super::*;
+    use crate::format::material_predicates::{MaterialSelectionState, SelectionValue};
+
+    fn word(out: &mut Vec<u8>, value: u32) { out.extend_from_slice(&value.to_le_bytes()); }
+    fn color(out: &mut Vec<u8>, id: &[u8; 4], value: f32) {
+        out.extend_from_slice(id);
+        out.extend_from_slice(b"COLR");
+        for _ in 0..4 {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    fn fixture() -> Vec<u8> {
+        let mut out = Vec::new();
+        word(&mut out, 2); // Shared header: two declarations, then two values.
+        out.extend_from_slice(b"DIFCCOLRBSAOCOLR");
+        color(&mut out, b"DIFC", 0.25);
+        color(&mut out, b"BSAO", 0.5);
+        word(&mut out, 1); // One material.
+        word(&mut out, 7);
+        out.extend_from_slice(b"fixture");
+        out.extend_from_slice(&[0; 32]); // Resource/implementation GUIDs.
+        word(&mut out, 1 << 7);
+        word(&mut out, 0x12345678);
+        word(&mut out, 1);
+        out.extend_from_slice(b"BKLT");
+        word(&mut out, 1);
+        out.extend_from_slice(b"TIMEBSAO");
+        out.extend_from_slice(&[1, 3]);
+        word(&mut out, 1);
+        out.extend_from_slice(b"BSAOCOLR");
+        color(&mut out, b"BSAO", 0.75);
+        out
+    }
+
+    #[test]
+    fn nonempty_shared_material_block_preserves_wire_order_and_local_precedence() {
+        let raw = fixture();
+        let mut reader = Cursor::new(&raw);
+        let chunk: SMaterialChunk = reader.read_le().unwrap();
+        assert_eq!(reader.position(), raw.len() as u64);
+        assert_eq!(chunk.shared_data.len(), 2);
+        let values = chunk.material_values(0).unwrap();
+        assert_eq!(values.iter().map(|d| d.data_id).collect::<Vec<_>>(), [
+            EMaterialDataId::BSAO,
+            EMaterialDataId::DIFC
+        ]);
+        let CMaterialDataInner::Color(value) = &values[0].data else { panic!() };
+        assert_eq!(value.r, 0.75);
+        let mut writer = Cursor::new(Vec::new());
+        writer.write_le(&chunk).unwrap();
+        assert_eq!(writer.into_inner(), raw);
+        assert!(chunk.material_values(1).is_err());
+    }
+
+    #[test]
+    fn external_variable_keys_use_set_hash_and_fourcc_byte_order() {
+        let chunk: SMaterialChunk = Cursor::new(fixture()).read_le().unwrap();
+        let material = &chunk.materials[0];
+        let key = material.variable_binding_key(FourCC(*b"TIME"));
+        assert_eq!(key, 0x12345678_54494d45);
+        let desc = material.variable_desc(key).unwrap();
+        assert_eq!(desc.data_id, FourCC(*b"BSAO"));
+        assert_eq!((desc.data_type, desc.packing_rule), (1, 3));
+        assert!(material.variable_desc(key ^ (1 << 32)).is_none());
+        assert!(material.variable_desc(key ^ 1).is_none());
+    }
+
+    #[test]
+    fn standalone_nil_texture_stores_usage_but_layer_slot_omits_it() {
+        let mut layer = Cursor::new(vec![0; 16]);
+        let token: CMaterialTextureTokenData = layer.read_le().unwrap();
+        assert!(token.usage.is_none());
+        assert_eq!(layer.position(), 16);
+        let mut raw = b"BCLRTXTR".to_vec();
+        raw.extend_from_slice(&[0; 16]);
+        word(&mut raw, 2);
+        for _ in 0..4 {
+            word(&mut raw, u32::MAX);
+        }
+        let mut reader = Cursor::new(&raw);
+        let data: CMaterialData = reader.read_le().unwrap();
+        assert_eq!(reader.position(), 44);
+        let CMaterialDataInner::Texture(token) = &data.data else { panic!() };
+        assert!(token.id.is_nil());
+        assert_eq!(token.usage.as_ref().unwrap().tex_coord, 2);
+        let mut writer = Cursor::new(Vec::new());
+        writer.write_le(&data).unwrap();
+        assert_eq!(writer.into_inner(), raw);
+    }
+
+    #[test]
+    fn model_selection_state_preserves_flags_shared_data_and_generated_bounds_presence() {
+        let chunk: SMaterialChunk = Cursor::new(fixture()).read_le().unwrap();
+        let model =
+            MaterialSelectionState::from_model_material(&chunk, 0, |_| unreachable!()).unwrap();
+        assert_eq!(model.flags, 1 << 7);
+        assert!(model.contains(EMaterialDataId::DIFC));
+        assert!(model.contains(EMaterialDataId::BSAO));
+        assert!(model.contains(EMaterialDataId::BKLB));
+        assert_eq!(model.select_definition("MFIN", &[], 3).unwrap(), Some(1));
+        let mut context = MaterialSelectionState::default();
+        context.flags = 1;
+        context.set(EMaterialDataId::PMOD, SelectionValue::Int(3));
+        context.append_fallback(&model);
+        assert_eq!(context.flags, 129);
+        assert_eq!(context.select_definition("PMOD", &["PMOD"], 15).unwrap(), Some(3));
     }
 }

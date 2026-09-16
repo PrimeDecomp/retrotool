@@ -1081,11 +1081,19 @@
     "RenderStaticModelSort",
     "ScannableParametersMP1",
     "VectorMP1",
-    "VisorParametersMP1"
+    "VisorParametersMP1",
+    "LightColors",
+    "LumaIntensity",
+    "LightDistanceAttenuation",
+    "LightAngleAttenuation",
+    "LightFlags",
+    "RoomRenderSettings",
+    "ColorModifierOptions"
   ],
   "enums": [
     "ItemType",
     "RenderTargetScene",
-    "WaterSortType"
+    "WaterSortType",
+    "ColorModifierMode"
   ]
 }

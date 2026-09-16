@@ -1,0 +1,33 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "LightFlags",
+  "description": "SLdrLightFlags bytes0..4; native loader7100abce04.",
+  "type": "property_list",
+  "properties": {
+    "0xa103d675": {
+      "name": "Flag 0",
+      "type": "bool",
+      "description": "Native default false. Semantic name unresolved."
+    },
+    "0x56608a5c": {
+      "name": "Flag 1",
+      "type": "bool",
+      "description": "Native default false. Semantic name unresolved."
+    },
+    "0xeeb94af2": {
+      "name": "Flag 2",
+      "type": "bool",
+      "description": "Native default false. Semantic name unresolved."
+    },
+    "0x67241f0c": {
+      "name": "Flag 3",
+      "type": "bool",
+      "description": "Native default false. Semantic name unresolved."
+    },
+    "0x3f1e6850": {
+      "name": "Fill Ambient",
+      "type": "bool",
+      "description": "Native default false. Becomes scene-node flag bit2."
+    }
+  }
+}

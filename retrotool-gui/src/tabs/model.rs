@@ -27,6 +27,7 @@ use crate::{
         convert_aabb,
         grid::GridSettings,
         model::{load_model, ModelLod},
+        scene_preview::{PreviewMesh, PreviewMeshStatus, ShaderPreview},
         TemporaryLabel,
     },
     tabs::{
@@ -79,7 +80,7 @@ impl ModelTab {
             None => return LoadState::Failed,
         };
         // Ensure all dependencies loaded
-        server.get_group_load_state(asset.textures.iter().map(|(_, h)| h.id()))
+        asset.get_load_state(server)
     }
 }
 
@@ -87,20 +88,24 @@ impl EditorTabSystem for ModelTab {
     type LoadParam = (
         SCommands,
         SResMut<Assets<Mesh>>,
-        SResMut<Assets<CustomMaterial>>,
         SResMut<Assets<ModelAsset>>,
         SResMut<Assets<TextureAsset>>,
         SResMut<Assets<Image>>,
         SResMut<AssetServer>,
         SResMut<EguiUserTextures>,
     );
-    type UiParam = (SCommands, SRes<AssetServer>, SRes<Assets<ModelAsset>>);
+    type UiParam = (
+        SCommands,
+        SRes<AssetServer>,
+        SRes<Assets<ModelAsset>>,
+        SQuery<Read<PreviewMesh>>,
+        SRes<ShaderPreview>,
+    );
 
     fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         let (
             mut commands,
             mut meshes,
-            mut materials,
             mut models,
             mut texture_assets,
             mut images,
@@ -121,7 +126,7 @@ impl EditorTabSystem for ModelTab {
             None => return,
         };
         // Ensure all dependencies loaded
-        match server.get_group_load_state(asset.textures.iter().map(|(_, h)| h.id())) {
+        match asset.get_load_state(&server) {
             LoadState::Loaded => {}
             _ => return,
         }
@@ -136,30 +141,25 @@ impl EditorTabSystem for ModelTab {
             }
         };
         let mut meshes = Vec::with_capacity(built.meshes.len());
-        for mesh in built.meshes {
-            let material = match asset.material(
-                &MaterialKey {
-                    material_idx: mesh.material_idx,
-                    mesh_flags: mesh.flags,
-                    mesh_mirrored: false,
-                },
-                &mut materials,
-            ) {
-                Ok(handle) => handle,
-                Err(e) => {
-                    log::warn!("Failed to build material: {:?}", e);
-                    continue;
-                }
-            };
+        for (mesh_index, mesh) in built.meshes.into_iter().enumerate() {
             let entity = commands
                 .spawn(MaterialMeshBundle::<CustomMaterial> {
                     mesh: mesh.mesh,
-                    material,
                     // transform: Transform::from_translation((-built.aabb.center).into()),
                     visibility: Visibility::Hidden,
                     ..default()
                 })
                 .id();
+            commands.entity(entity).insert(PreviewMesh::new(
+                self.handle.clone(),
+                mesh_index,
+                MaterialKey {
+                    material_idx: mesh.material_idx,
+                    mesh_class: mesh.mesh_class,
+                    mesh_mirrored: false,
+                    mesh_two_sided: mesh.two_sided,
+                },
+            ));
             meshes.push(LoadedMesh {
                 entity,
                 material_idx: mesh.material_idx,
@@ -187,7 +187,7 @@ impl EditorTabSystem for ModelTab {
     }
 
     fn close(&mut self, query: SystemParamItem<Self::LoadParam>) -> bool {
-        let (mut commands, _, _, _, _, _, _, _) = query;
+        let (mut commands, _, _, _, _, _, _) = query;
         if let Some(loaded) = &self.loaded {
             for mesh in &loaded.meshes {
                 if let Some(commands) = commands.get_entity(mesh.entity) {
@@ -217,7 +217,7 @@ impl EditorTabSystem for ModelTab {
             ui.interact(rect, ui.make_persistent_id("background"), egui::Sense::click_and_drag());
         self.camera.update(&rect, &response, ui.input(|i| i.scroll_delta));
 
-        let (mut commands, server, models) = query;
+        let (mut commands, server, models, preview_meshes, preview) = query;
         if let Some(loaded) = &mut self.loaded {
             commands.spawn((
                 Camera3dBundle {
@@ -271,8 +271,18 @@ impl EditorTabSystem for ModelTab {
                             ui.label(format!("Distance: {value}"));
                         }
                     }
+                    ui.small(
+                        preview.description(
+                            loaded.lod[self.selected_lod]
+                                .meshes
+                                .iter()
+                                .filter(|&idx| loaded.meshes[idx].visible)
+                                .map(|idx| preview_meshes.get(loaded.meshes[idx].entity).ok()),
+                        ),
+                    );
                     for idx in loaded.lod[self.selected_lod].meshes.iter() {
                         let mesh = &mut loaded.meshes[idx];
+                        let renderer = preview_meshes.get(mesh.entity).ok();
                         ui.horizontal(|ui| {
                             ui.checkbox(
                                 &mut mesh.visible,
@@ -280,7 +290,22 @@ impl EditorTabSystem for ModelTab {
                                     "Mesh {idx} ({})",
                                     loaded.materials[mesh.material_idx].name
                                 ),
+                            )
+                            .on_hover_text(
+                                renderer.map_or("Preparing renderer", |r| r.description.as_str()),
                             );
+                            let status = renderer
+                                .map_or(PreviewMeshStatus::Preparing, |r| r.status(&preview));
+                            let color = match status {
+                                PreviewMeshStatus::Fallback => egui::Color32::LIGHT_YELLOW,
+                                PreviewMeshStatus::Unavailable => egui::Color32::LIGHT_RED,
+                                _ => ui.visuals().text_color(),
+                            };
+                            ui.label(egui::RichText::new(status.label()).small().color(color))
+                                .on_hover_text(
+                                    renderer
+                                        .map_or("Preparing renderer", |r| r.description.as_str()),
+                                );
                             if !matches!(mesh.unk_c, 0 | 1) {
                                 ui.colored_label(
                                     egui::Color32::RED,
@@ -324,6 +349,39 @@ impl EditorTabSystem for ModelTab {
                                         .clicked()
                                     {
                                         self.selected_material = None;
+                                    }
+                                    for renderer in loaded.meshes.iter()
+                                        .filter(|m| m.material_idx == material_idx)
+                                        .filter_map(|m| preview_meshes.get(m.entity).ok())
+                                        .map(|r| r.description.as_str())
+                                        .collect::<std::collections::BTreeSet<_>>() {
+                                        ui.label(renderer);
+                                    }
+                                    if let Some(selection) = models.get(&self.handle)
+                                        .and_then(|m| m.shader_selections.get(&material_idx)) {
+                                        ui.collapsing("Cooked forward shader (static model state)", |ui| {
+                                            match selection {
+                                                Ok(s) => {
+                                                    property_with_value(ui, "Implementation", s.name.clone());
+                                                    property_with_value(ui, "Material hash", format!("{:08X}", s.material_hash));
+                                                    property_with_value(ui, "Runtime ID", format!("{:X}", s.runtime_id));
+                                                    property_with_value(ui, "Permutation", format!("{:016X}{:016X}", s.permutation[1], s.permutation[0]));
+                                                    property_with_value(ui, "Shader hash", format!("{:016X}", s.shader_hash));
+                                                    if !loaded.meshes.iter().any(|m| m.material_idx == material_idx
+                                                        && preview_meshes.get(m.entity).is_ok_and(|r| r.original.is_some())) {
+                                                        ui.label(s.surface_profile.description());
+                                                    }
+                                                    ui.collapsing("Cooked graphics state", |ui| {
+                                                        ui.monospace(format!("Technique: {:#?}\nShader overrides: {:#?}", s.technique_state, s.override_state));
+                                                        for warning in &s.render_state_warnings { ui.label(warning); }
+                                                    });
+                                                    ui.collapsing("Selected feature options", |ui| {
+                                                        for feature in &s.features { ui.label(feature); }
+                                                    });
+                                                }
+                                                Err(reason) => { ui.label(format!("Selection unavailable: {reason}")); }
+                                            }
+                                        });
                                     }
                                     material_ui(
                                         ui,
@@ -401,17 +459,22 @@ fn material_ui(
     server: &AssetServer,
 ) {
     property_with_value(ui, "Material", mat.name.clone());
-    property_with_value(ui, "Shader ID", format!("{}", mat.shader_id));
-    property_with_value(ui, "Unk ID", format!("{}", mat.unk_guid));
-    property_with_value(ui, "Flags", format!("{:032b}", mat.unk1));
-    property_with_value(ui, "Unk", format!("{}", mat.unk2));
-    ui.collapsing(format!("Render types: {}", mat.render_types.len()), |ui| {
-        for render_type in &mat.render_types {
+    property_with_value(ui, "Material resource ID", format!("{}", mat.material_resource_id));
+    property_with_value(ui, "Material implementation ID", format!("{}", mat.material_id));
+    property_with_value(ui, "Flags", format!("{:032b}", mat.flags));
+    property_with_value(ui, "Material set hash", format!("{:08X}", mat.material_set_hash));
+    ui.collapsing(format!("Traits: {}", mat.traits.len()), |ui| {
+        for material_trait in &mat.traits {
+            ui.label(material_trait.to_string());
+        }
+    });
+    ui.collapsing(format!("External variables: {}", mat.variable_descs.len()), |ui| {
+        for render_type in &mat.variable_descs {
             ui.group(|ui| {
+                property_with_value(ui, "Name", format!("{}", render_type.name));
                 property_with_value(ui, "Data ID", format!("{}", render_type.data_id));
-                property_with_value(ui, "Data type", format!("{}", render_type.data_type));
-                property_with_value(ui, "Flag 1", format!("{}", render_type.flag1));
-                property_with_value(ui, "Flag 2", format!("{}", render_type.flag2));
+                property_with_value(ui, "Variable type", format!("{}", render_type.data_type));
+                property_with_value(ui, "Packing rule", format!("{}", render_type.packing_rule));
             });
         }
     });
@@ -443,14 +506,21 @@ fn material_ui(
                         for (idx, color) in layers.base.colors.iter().enumerate() {
                             property_with_value(
                                 ui,
-                                &format!("Color {idx}"),
+                                &format!("Blend register {idx}"),
                                 format!("{:?}", color.to_array()),
                             );
                         }
                         property_with_value(ui, "Flags", format!("{}", layers.base.flags));
-                        property_with_value(ui, "Unk", format!("{}", layers.base.unk));
-                        for texture in &layers.textures {
+                        property_with_value(
+                            ui,
+                            "Blend control",
+                            format!("{:?}", layers.base.blend_control),
+                        );
+                        for (name, texture) in
+                            ["Texture 0", "Texture 1", "Blend texture"].iter().zip(&layers.textures)
+                        {
                             ui.group(|ui| {
+                                ui.label(*name);
                                 texture_ui(ui, texture, textures, state, server);
                             });
                         }

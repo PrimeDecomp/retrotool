@@ -1,0 +1,48 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ColorModifier",
+  "description": "SLdrColorModifier71007340dc. Runtime activation, timing and script links determine whether and where a color is applied.",
+  "type": "property_list",
+  "properties": {
+    "0x8133a24b": {
+      "name": "Initial Color",
+      "type": "color",
+      "description": "White by default."
+    },
+    "0xd968bd8e": {
+      "name": "End Color",
+      "type": "color",
+      "description": "White by default."
+    },
+    "0x627d5359": {
+      "name": "Initial Intensity",
+      "type": "f32",
+      "description": "Default1; scales RGB, preserves alpha."
+    },
+    "0xc1fd4866": {
+      "name": "End Intensity",
+      "type": "f32",
+      "description": "Default1; scales RGB, preserves alpha."
+    },
+    "0xdbe10078": {
+      "name": "Color Gradient",
+      "type": "unknown",
+      "description": "CColorGradient: count and up to four RGBA CMayaSpline channels; decoded by the typed room_color API."
+    },
+    "0x34d88fef": {
+      "name": "Timing Spline",
+      "type": "unknown",
+      "description": "CMayaSpline; decoded by the typed room_color API. This inspector retains the raw bytes."
+    },
+    "0xb7bf28fd": {
+      "name": "Options",
+      "type": "struct",
+      "struct": "ColorModifierOptions"
+    },
+    "0xa3fbf12b": {
+      "name": "Mode",
+      "type": "enum",
+      "enum": "ColorModifierMode"
+    }
+  }
+}

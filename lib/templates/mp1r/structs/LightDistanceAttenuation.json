@@ -1,0 +1,23 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "LightDistanceAttenuation",
+  "description": "SLdrLightDistanceAttenuation; native loader7100abbe74.",
+  "type": "property_list",
+  "properties": {
+    "0x174c8abc": {
+      "name": "Distance Mode CRC",
+      "type": "u32",
+      "description": "f75d18cf resolves to1,5e3252a0 to2,fd044671 and unknown values to3. Default3."
+    },
+    "0xe5ceaf7c": {
+      "name": "Inner Radius",
+      "type": "f32",
+      "description": "Native default0.25."
+    },
+    "0x68ac20b3": {
+      "name": "Outer Radius",
+      "type": "f32",
+      "description": "Native default1."
+    }
+  }
+}

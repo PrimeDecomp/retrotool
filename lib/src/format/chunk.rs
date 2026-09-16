@@ -20,9 +20,14 @@ pub struct ChunkDescriptor<O: ByteOrder> {
 impl<O: ByteOrder> ChunkDescriptor<O> {
     pub fn slice(data: &[u8]) -> Result<(&Self, &[u8], &[u8])> {
         let header = Self::ref_from_prefix(data).ok_or_else(|| anyhow!("Invalid chunk header"))?;
-        let start = size_of::<Self>() + header.skip.get() as usize;
-        let slice = &data[start..(start + header.size.get() as usize)];
-        let remain = &data[(start + header.size.get() as usize)..];
+        let start = size_of::<Self>()
+            .checked_add(usize::try_from(header.skip.get())?)
+            .ok_or_else(|| anyhow!("Chunk skip overflow"))?;
+        let end = start
+            .checked_add(usize::try_from(header.size.get())?)
+            .ok_or_else(|| anyhow!("Chunk size overflow"))?;
+        let slice = data.get(start..end).ok_or_else(|| anyhow!("Truncated chunk payload"))?;
+        let remain = &data[end..];
         Ok((header, slice, remain))
     }
 

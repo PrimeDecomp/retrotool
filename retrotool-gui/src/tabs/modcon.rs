@@ -20,7 +20,11 @@ use crate::{
     },
     material::CustomMaterial,
     render::{
-        camera::ModelCamera, convert_transform, grid::GridSettings, model::load_model,
+        camera::ModelCamera,
+        convert_transform,
+        grid::GridSettings,
+        model::load_model,
+        scene_preview::{PreviewMesh, ShaderPreview},
         TemporaryLabel,
     },
     tabs::{model::ModelTab, EditorTabSystem, TabState},
@@ -114,7 +118,6 @@ impl EditorTabSystem for ModConTab {
     type LoadParam = (
         SCommands,
         SResMut<Assets<Mesh>>,
-        SResMut<Assets<CustomMaterial>>,
         SResMut<Assets<ModelAsset>>,
         SResMut<Assets<TextureAsset>>,
         SResMut<Assets<Image>>,
@@ -128,13 +131,14 @@ impl EditorTabSystem for ModConTab {
         SRes<Assets<ModConAsset>>,
         SQuery<Read<Parent>, With<Intersection<ModConRaycastSet>>>,
         SQuery<(Read<ModelLabel>, Read<Children>)>,
+        SRes<ShaderPreview>,
+        SQuery<Read<PreviewMesh>>,
     );
 
     fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         let (
             mut commands,
             mut meshes,
-            mut materials,
             mut models,
             mut texture_assets,
             mut images,
@@ -195,6 +199,7 @@ impl EditorTabSystem for ModConTab {
                     continue;
                 }
             };
+            let model_handle = info.handle.clone();
             for &transform in &info.transforms {
                 let is_mirrored = transform.scale.x.is_sign_negative()
                     ^ transform.scale.y.is_sign_negative()
@@ -207,27 +212,18 @@ impl EditorTabSystem for ModConTab {
                     .with_children(|builder| {
                         for idx in built.lod[0].meshes.iter() {
                             let mesh = &built.meshes[idx];
-                            let material = match asset.material(
-                                &MaterialKey {
-                                    material_idx: mesh.material_idx,
-                                    mesh_flags: mesh.flags,
-                                    mesh_mirrored: is_mirrored,
-                                },
-                                &mut materials,
-                            ) {
-                                Ok(handle) => handle,
-                                Err(e) => {
-                                    log::warn!("Failed to build material: {:?}", e);
-                                    continue;
-                                }
-                            };
                             builder.spawn((
                                 MaterialMeshBundle::<CustomMaterial> {
                                     mesh: mesh.mesh.clone(),
-                                    material,
                                     ..default()
                                 },
                                 RaycastMesh::<ModConRaycastSet>::default(),
+                                PreviewMesh::new(model_handle.clone(), idx, MaterialKey {
+                                    material_idx: mesh.material_idx,
+                                    mesh_class: mesh.mesh_class,
+                                    mesh_mirrored: is_mirrored,
+                                    mesh_two_sided: mesh.two_sided,
+                                }),
                             ));
                         }
                     })
@@ -261,7 +257,7 @@ impl EditorTabSystem for ModConTab {
     }
 
     fn close(&mut self, query: SystemParamItem<Self::LoadParam>) -> bool {
-        let (mut commands, _, _, _, _, _, _, _) = query;
+        let (mut commands, _, _, _, _, _, _) = query;
         for model in self.models.iter().flat_map(|l| &l.loaded) {
             if let Some(commands) = commands.get_entity(model.entity) {
                 commands.despawn_recursive();
@@ -289,7 +285,16 @@ impl EditorTabSystem for ModConTab {
             ui.interact(rect, ui.make_persistent_id("background"), Sense::click_and_drag());
         self.camera.update(&rect, &response, ui.input(|i| i.scroll_delta));
 
-        let (mut commands, server, models, mod_con_assets, intersection_query, model_query) = query;
+        let (
+            mut commands,
+            server,
+            models,
+            mod_con_assets,
+            intersection_query,
+            model_query,
+            preview,
+            preview_meshes,
+        ) = query;
         if self.models.is_empty() || !self.models.iter().all(|m| !m.loaded.is_empty()) {
             ui.centered_and_justified(|ui| {
                 match self.get_load_state(&server, &mod_con_assets, &models) {
@@ -311,7 +316,18 @@ impl EditorTabSystem for ModConTab {
         }
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical().max_height(rect.height() * 0.25).show(ui, |ui| {
-                ui.checkbox(&mut self.env_light, "Environment lighting");
+                ui.small(
+                    preview.description(
+                        self.models
+                            .iter()
+                            .flat_map(|m| &m.loaded)
+                            .filter(|m| m.visible)
+                            .filter_map(|m| model_query.get(m.entity).ok())
+                            .flat_map(|(_, children)| children.iter())
+                            .map(|e| preview_meshes.get(*e).ok()),
+                    ),
+                );
+                ui.checkbox(&mut self.env_light, "Environment lighting for preview materials");
                 ui.label(format!("Models: {}", self.models.len()));
                 ui.label(format!("Instances: {}", self.models.sum_by(|m| m.loaded.len())));
                 if let Some(selected) = &self.selected_model {

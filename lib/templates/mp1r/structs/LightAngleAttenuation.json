@@ -1,0 +1,18 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "LightAngleAttenuation",
+  "description": "SLdrLightAngleAttenuation; native loader7100abac1c.",
+  "type": "property_list",
+  "properties": {
+    "0x635dfcc7": {
+      "name": "Inner Angle",
+      "type": "f32",
+      "description": "Full cone angle in degrees, default0."
+    },
+    "0xb0a71764": {
+      "name": "Outer Angle",
+      "type": "f32",
+      "description": "Full cone angle in degrees, default45."
+    }
+  }
+}

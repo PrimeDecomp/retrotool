@@ -1,0 +1,63 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ColorModifierOptions",
+  "description": "SLdrColorModifierOptions7100a91c4c. Descriptive consumer names, not recovered editor labels. Sparse repeated blocks retain earlier values.",
+  "type": "property_list",
+  "properties": {
+    "0x28376d3f": {
+      "name": "Initial Time",
+      "type": "f32",
+      "description": "Native default 0."
+    },
+    "0xb1437b20": {
+      "name": "Random Time Range",
+      "type": "f32",
+      "description": "Native default 0."
+    },
+    "0xe4c9cd3e": {
+      "name": "Initially Playing",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0x47a9b8f4": {
+      "name": "Apply From Start",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0xcb60e6ae": {
+      "name": "Apply Gradient From Start",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0xe000181c": {
+      "name": "Apply End Color",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0xf9159caf": {
+      "name": "Apply Gradient End",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0xff17f0bb": {
+      "name": "Apply Initial Time",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0xcb494abc": {
+      "name": "Looping",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0x68b9c38e": {
+      "name": "Use Gradient",
+      "type": "bool",
+      "description": "Native default false."
+    },
+    "0x83737173": {
+      "name": "Use Think Delta",
+      "type": "bool",
+      "description": "Native default true."
+    }
+  }
+}

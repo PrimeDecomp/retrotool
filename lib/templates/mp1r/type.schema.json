@@ -260,6 +260,13 @@
               "const": "pooled_string"
             }
           }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unknown"
+            }
+          }
         }
       ]
     }

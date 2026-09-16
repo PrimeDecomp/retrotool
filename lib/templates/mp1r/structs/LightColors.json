@@ -1,0 +1,13 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "LightColors",
+  "description": "SLdrLightColors; native loader7100abb534.",
+  "type": "property_list",
+  "properties": {
+    "0x8f421907": {
+      "name": "Color",
+      "type": "color",
+      "description": "Native default RGBA (1,1,1,1)."
+    }
+  }
+}

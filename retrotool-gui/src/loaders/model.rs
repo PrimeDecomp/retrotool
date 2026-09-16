@@ -1,39 +1,79 @@
-use std::{num::NonZeroU8, path::PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Error, Result};
+use anyhow::{ensure, Context, Error, Result};
 use bevy::{
     asset::{AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadState, LoadedAsset},
     prelude::*,
-    render::render_resource::SamplerDescriptor,
+    render::texture::ImageSampler,
     utils::{hashbrown::hash_map::Entry, HashMap},
 };
 use retrolib::format::{
     cmdl::{
-        CMaterialCache, CMaterialDataInner, EMaterialDataId, ModelData, STextureUsageInfo,
+        CMaterialDataInner, CMaterialTextureTokenData, EMaterialDataId, ModelData, SMaterialChunk,
         K_FORM_CMDL,
     },
     foot::{locate_asset_id, locate_meta},
-    txtr::{
-        ETextureAnisotropicRatio, ETextureFilter, ETextureMipFilter, ETextureWrap,
-        STextureSamplerData,
-    },
+    material_features::GraphicsState,
+    material_predicates::MaterialSelectionState,
+    texture_sampler::TextureSamplerParams,
 };
 use uuid::Uuid;
-use wgpu_types::{AddressMode, Face, FilterMode};
 use zerocopy::LittleEndian;
 
 use crate::{
-    loaders::texture::TextureAsset,
-    material::CustomMaterial,
-    render::{convert_color, model::MESH_FLAG_OPAQUE},
+    loaders::{
+        material::MaterialAsset,
+        texture::{sampler_descriptor, TextureAsset},
+    },
+    material::{CustomMaterial, MprSurfaceProfile},
+    render::{
+        convert_color,
+        material_state::{mesh_draw_state, MaterialRenderState},
+    },
     AssetRef,
 };
 
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub struct MaterialKey {
     pub material_idx: usize,
-    pub mesh_flags: u16,
+    pub mesh_class: u8,
     pub mesh_mirrored: bool,
+    pub mesh_two_sided: bool,
+}
+
+/// Texture identity plus per-use sampler overrides. UV selection is a shader
+/// input and intentionally does not produce another image/sampler allocation.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub struct TextureImageKey {
+    pub id: Uuid,
+    pub sampler_override: [i32; 4],
+}
+
+impl From<&CMaterialTextureTokenData> for TextureImageKey {
+    fn from(texture: &CMaterialTextureTokenData) -> Self {
+        Self {
+            id: texture.id,
+            sampler_override: texture
+                .usage
+                .as_ref()
+                .map_or([-1; 4], |u| [u.filter, u.wrap_x, u.wrap_y, u.wrap_z]),
+        }
+    }
+}
+
+/// Cooked forward selection from the model's static state (no game scene lights).
+#[derive(Debug, Clone)]
+pub struct ModelShaderSelection {
+    pub name: String,
+    pub runtime_id: u64,
+    pub permutation: [u64; 2],
+    pub material_hash: u32,
+    pub shader_hash: u64,
+    pub features: Vec<String>,
+    pub surface_profile: MprSurfaceProfile,
+    pub technique_state: GraphicsState,
+    pub override_state: GraphicsState,
+    pub render_state_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, bevy::reflect::TypeUuid)]
@@ -42,7 +82,9 @@ pub struct ModelAsset {
     pub asset_ref: AssetRef,
     pub inner: ModelData<LittleEndian>,
     pub textures: HashMap<Uuid, Handle<TextureAsset>>,
-    pub texture_images: HashMap<Uuid, Handle<Image>>,
+    pub material_resources: HashMap<Uuid, Handle<MaterialAsset>>,
+    pub shader_selections: HashMap<usize, Result<ModelShaderSelection, String>>,
+    pub texture_images: HashMap<TextureImageKey, Handle<Image>>,
     pub materials: HashMap<MaterialKey, Handle<CustomMaterial>>,
 }
 
@@ -65,10 +107,15 @@ impl AssetLoader for ModelAssetLoader {
             // log::info!("Loaded model {:?}", data.head);
             // log::info!("Loaded meshes {:#?}", data.mesh);
             let mut dependencies = HashMap::<Uuid, AssetPath>::new();
-            for mat in &data.mtrl.materials {
-                for data in &mat.data {
+            for values in std::iter::once(&data.mtrl.shared_data)
+                .chain(data.mtrl.materials.iter().map(|m| &m.data))
+            {
+                for data in values {
                     match &data.data {
                         CMaterialDataInner::Texture(texture) => {
+                            if texture.id.is_nil() {
+                                continue;
+                            }
                             dependencies.insert(
                                 texture.id,
                                 AssetPath::new(PathBuf::from(format!("{}.TXTR", texture.id)), None),
@@ -96,15 +143,31 @@ impl AssetLoader for ModelAssetLoader {
                 .iter()
                 .map(|(u, p)| (*u, load_context.get_handle(p.clone())))
                 .collect();
+            let material_dependencies: HashMap<Uuid, AssetPath> = data
+                .mtrl
+                .materials
+                .iter()
+                .map(|m| m.material_resource_id)
+                .filter(|id| !id.is_nil())
+                .map(|id| (id, AssetPath::new(PathBuf::from(format!("{id}.MTRL")), None)))
+                .collect();
+            let material_resources = material_dependencies
+                .iter()
+                .map(|(id, path)| (*id, load_context.get_handle(path.clone())))
+                .collect();
             load_context.set_default_asset(
                 LoadedAsset::new(ModelAsset {
                     asset_ref: AssetRef { id, kind: K_FORM_CMDL },
                     inner: data,
                     textures,
+                    material_resources,
+                    shader_selections: default(),
                     texture_images: default(),
                     materials: default(),
                 })
-                .with_dependencies(dependencies.into_values().collect()),
+                .with_dependencies(
+                    dependencies.into_values().chain(material_dependencies.into_values()).collect(),
+                ),
             );
             Ok(())
         })
@@ -115,61 +178,68 @@ impl AssetLoader for ModelAssetLoader {
 
 impl ModelAsset {
     pub fn get_load_state(&self, server: &AssetServer) -> LoadState {
-        server.get_group_load_state(self.textures.values().map(|h| h.id()))
-    }
-
-    #[allow(dead_code)]
-    pub fn sampler_data<'asset>(
-        &self,
-        texture_id: &Uuid,
-        texture_assets: &'asset Assets<TextureAsset>,
-    ) -> Option<&'asset STextureSamplerData> {
-        self.textures
-            .get(texture_id)
-            .and_then(|handle| texture_assets.get(handle))
-            .map(|txtr| &txtr.inner.head.sampler_data)
+        let textures = server.get_group_load_state(self.textures.values().map(|h| h.id()));
+        if textures != LoadState::Loaded {
+            return textures;
+        }
+        // MTRL failure retains the approximate viewer path, with a diagnostic.
+        // Wait for every request to finish; one failed resource must not hide
+        // another resource that is still loading.
+        if self
+            .material_resources
+            .values()
+            .any(|h| matches!(server.get_load_state(h), LoadState::Loading | LoadState::NotLoaded))
+        {
+            LoadState::Loading
+        } else {
+            LoadState::Loaded
+        }
     }
 
     pub fn build_texture_images(
         &mut self,
-        texture_assets: &mut Assets<TextureAsset>,
-        _images: &mut Assets<Image>,
+        texture_assets: &Assets<TextureAsset>,
+        images: &mut Assets<Image>,
     ) {
-        // Build sampler descriptors
-        // let mut sampler_descriptors = HashMap::<Uuid, SamplerDescriptor>::new();
-        // for mat in &self.inner.mtrl.materials {
-        //     for data in &mat.data {
-        //         match &data.data {
-        //             CMaterialDataInner::Texture(texture) => {
-        //                 if let Some(usage) = &texture.usage {
-        //                     let sampler_data = self.sampler_data(&texture.id, texture_assets);
-        //                     sampler_descriptors.insert(
-        //                         texture.id,
-        //                         sampler_descriptor_from_usage(usage, sampler_data),
-        //                     );
-        //                 }
-        //             }
-        //             CMaterialDataInner::LayeredTexture(layers) => {
-        //                 for texture in &layers.textures {
-        //                     if let Some(usage) = &texture.usage {
-        //                         let sampler_data = self.sampler_data(&texture.id, texture_assets);
-        //                         sampler_descriptors.insert(
-        //                             texture.id,
-        //                             sampler_descriptor_from_usage(usage, sampler_data),
-        //                         );
-        //                     }
-        //                 }
-        //             }
-        //             _ => continue,
-        //         }
-        //     }
-        // }
-
-        // Build texture images
-        for (id, handle) in &self.textures {
-            let asset = texture_assets.get(handle).unwrap();
-            // TODO: use sampler descriptors
-            self.texture_images.insert(*id, asset.texture.clone());
+        for values in std::iter::once(&self.inner.mtrl.shared_data)
+            .chain(self.inner.mtrl.materials.iter().map(|m| &m.data))
+        {
+            for data in values {
+                let textures = match &data.data {
+                    CMaterialDataInner::Texture(t) => std::slice::from_ref(t),
+                    CMaterialDataInner::LayeredTexture(t) => &t.textures,
+                    _ => continue,
+                };
+                for texture in textures {
+                    if texture.id.is_nil() {
+                        continue;
+                    }
+                    let key = TextureImageKey::from(texture);
+                    if self.texture_images.contains_key(&key) {
+                        continue;
+                    }
+                    let Some(asset) =
+                        self.textures.get(&texture.id).and_then(|h| texture_assets.get(h))
+                    else {
+                        continue;
+                    };
+                    let base = TextureSamplerParams::from_header(&asset.inner.head.sampler_data);
+                    let params = texture.usage.as_ref().map_or(base, |u| base.with_usage(u));
+                    let handle = if params == base {
+                        asset.texture.clone()
+                    } else {
+                        let Some(mut image) = images.get(&asset.texture).cloned() else {
+                            continue;
+                        };
+                        image.sampler_descriptor = ImageSampler::Descriptor(sampler_descriptor(
+                            &params,
+                            asset.sampler_features,
+                        ));
+                        images.add(image)
+                    };
+                    self.texture_images.insert(key, handle);
+                }
+            }
         }
     }
 
@@ -177,40 +247,175 @@ impl ModelAsset {
         &mut self,
         key: &MaterialKey,
         assets: &mut Assets<CustomMaterial>,
+        resources: &Assets<MaterialAsset>,
+        textures: &Assets<TextureAsset>,
     ) -> Result<Handle<CustomMaterial>> {
+        if !self.shader_selections.contains_key(&key.material_idx) {
+            let selection = self
+                .select_shader(key.material_idx, resources, textures)
+                .map_err(|e| format!("{e:#}"));
+            if let Err(reason) = &selection {
+                log::warn!("Material {}: approximate shading: {reason}", key.material_idx);
+            }
+            self.shader_selections.insert(key.material_idx, selection);
+        }
         Ok(match self.materials.entry(*key) {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(e) => {
-                let material =
-                    build_material(key, &self.inner.mtrl.materials, &self.texture_images)?;
+                let selection =
+                    self.shader_selections.get(&key.material_idx).and_then(|s| s.as_ref().ok());
+                let (material, warnings) =
+                    build_material(key, &self.inner.mtrl, &self.texture_images, selection)?;
+                for warning in &warnings {
+                    log::warn!("Material {} render state: {warning}", key.material_idx);
+                }
+                if let Some(Ok(selection)) = self.shader_selections.get_mut(&key.material_idx) {
+                    for warning in warnings {
+                        if !selection.render_state_warnings.contains(&warning) {
+                            selection.render_state_warnings.push(warning);
+                        }
+                    }
+                }
                 let handle = assets.add(material);
                 e.insert(handle.clone());
                 handle
             }
         })
     }
+
+    fn select_shader(
+        &self,
+        index: usize,
+        resources: &Assets<MaterialAsset>,
+        textures: &Assets<TextureAsset>,
+    ) -> Result<ModelShaderSelection> {
+        let material = self.inner.mtrl.materials.get(index).context("Invalid material index")?;
+        let resource = self
+            .material_resources
+            .get(&material.material_resource_id)
+            .and_then(|h| resources.get(h))
+            .context("Cooked MTRL resource unavailable")?;
+        let payload = resource.inner.payload()?;
+        ensure!(payload.runtime.id == material.material_id, "Model/MTRL implementation mismatch");
+        let state = MaterialSelectionState::from_model_material(&self.inner.mtrl, index, |id| {
+            Ok(self.textures.get(&id).and_then(|h| textures.get(h)).map(|t| t.inner.head.kind))
+        })?;
+        let selected = payload
+            .select_nvn_shader(b'f', &state)?
+            .context("No forward shader for static model state")?;
+        // Evidence is specific to this resource/revision and shader. Expanding
+        // this to other implementations requires comparing their instructions.
+        let layered = material.material_resource_id
+            == Uuid::from_u128(0x07d578a947c04a4daa69573473fb8d2c)
+            && payload.runtime.hash == 0x0b8c1a78
+            && selected.identifier.permutation == [0x022c7d2b63205b00, 0]
+            && selected.shader_hash == 0x5627e993cc49096a
+            && [("BCRL", 2), ("MTLL", 2), ("NRML", 8)].iter().all(|(id, option)| {
+                selected.features.iter().any(|v| {
+                    v.definition == "LAYR" && v.data_ids == [*id] && v.definition_option == *option
+                })
+            });
+        let single = material.material_resource_id
+            == Uuid::from_u128(0x5beb2ff2107f4b4681384ff85676505a)
+            && payload.runtime.hash == 0x0b8c1a78
+            && selected.identifier.permutation == [0x022c4d2b6b2c5a00, 0]
+            && selected.shader_hash == 0x7f0637bf372a9c57
+            && ["BCLR", "METL", "NMAP"].iter().all(|id| {
+                selected.features.iter().any(|v| {
+                    v.definition == "TEXS" && v.data_ids == [*id] && v.definition_option == 1
+                })
+            });
+        let surface_profile = if layered {
+            MprSurfaceProfile::LayeredVine
+        } else if single {
+            MprSurfaceProfile::SingleVine
+        } else {
+            MprSurfaceProfile::Approximate
+        };
+        let mut features = Vec::new();
+        for v in &selected.features {
+            let label = format!(
+                "{}: {} {} = {}",
+                v.feature_path.join("/"),
+                v.definition,
+                v.data_ids.join(","),
+                v.definition_option
+            );
+            if !features.contains(&label) {
+                features.push(label);
+            }
+        }
+        Ok(ModelShaderSelection {
+            name: selected.material_name.into(),
+            runtime_id: selected.runtime_id,
+            permutation: selected.identifier.permutation,
+            material_hash: payload.runtime.hash,
+            shader_hash: selected.shader_hash,
+            features,
+            surface_profile,
+            technique_state: selected.technique_state,
+            override_state: selected.override_state,
+            render_state_warnings: Vec::new(),
+        })
+    }
 }
 
 fn build_material(
     key: &MaterialKey,
-    materials: &[CMaterialCache],
-    texture_images: &HashMap<Uuid, Handle<Image>>,
-) -> Result<CustomMaterial> {
+    materials: &SMaterialChunk,
+    texture_images: &HashMap<TextureImageKey, Handle<Image>>,
+    selection: Option<&ModelShaderSelection>,
+) -> Result<(CustomMaterial, Vec<String>)> {
+    let bound = mesh_draw_state(key.mesh_class, key.mesh_two_sided, key.mesh_mirrored)?;
+    let mut state = GraphicsState::default();
+    if let Some(selected) = selection {
+        state.merge(&selected.technique_state)?;
+    }
+    state.merge(&bound)?;
+    if let Some(selected) = selection {
+        state.merge(&selected.override_state)?;
+    }
+    let mut render_state = MaterialRenderState::default();
+    // The bound draw state is already live when the composed state is bound.
+    // An override excluding RT0 must preserve that target's previous settings.
+    let mut warnings = render_state.apply(&bound);
+    warnings.extend(render_state.apply(&state));
     let mut out_mat = CustomMaterial {
-        alpha_mode: if key.mesh_flags & MESH_FLAG_OPAQUE != 0 {
-            AlphaMode::Opaque
-        } else {
-            AlphaMode::Blend
-        },
-        cull_mode: Some(if key.mesh_mirrored { Face::Front } else { Face::Back }),
+        alpha_mode: if key.mesh_class & 1 == 0 { AlphaMode::Opaque } else { AlphaMode::Blend },
+        render_state,
         ..default()
     };
-    for data in &materials[key.material_idx].data {
+    let profile = selection.map_or(MprSurfaceProfile::Approximate, |s| s.surface_profile);
+    let values = materials.material_values(key.material_idx)?;
+    if profile == MprSurfaceProfile::LayeredVine {
+        let smoothness =
+            values.iter().find(|d| d.data_id == EMaterialDataId::BLSM).and_then(|d| match d.data {
+                CMaterialDataInner::Scalar(v) => Some(v),
+                _ => None,
+            });
+        let scales = values.iter().find(|d| d.data_id == EMaterialDataId::BSAO).and_then(|d| {
+            match &d.data {
+                CMaterialDataInner::Color(v) => Some(Vec4::from_array(v.to_array())),
+                _ => None,
+            }
+        });
+        if let (Some(s), Some(k)) = (smoothness, scales) {
+            if s.is_finite() && s > 0.0 && k.is_finite() {
+                out_mat.surface_profile = profile;
+                out_mat.layer_smoothness = s;
+                out_mat.layer_scales = k;
+            }
+        }
+    } else {
+        out_mat.surface_profile = profile;
+    }
+    for data in values {
         match data.data_id {
             EMaterialDataId::DIFT | EMaterialDataId::BCLR => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
                     out_mat.base_color_l0 = Color::WHITE;
-                    out_mat.base_color_texture_0 = texture_images.get(&texture.id).cloned();
+                    out_mat.base_color_texture_0 =
+                        texture_images.get(&TextureImageKey::from(texture)).cloned();
                     out_mat.base_color_uv_0 =
                         texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                 }
@@ -224,11 +429,11 @@ fn build_material(
                     out_mat.base_color_l1 = convert_color(&layers.base.colors[1]);
                     out_mat.base_color_l2 = convert_color(&layers.base.colors[2]);
                     out_mat.base_color_texture_0 =
-                        texture_images.get(&layers.textures[0].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[0])).cloned();
                     out_mat.base_color_texture_1 =
-                        texture_images.get(&layers.textures[1].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[1])).cloned();
                     out_mat.base_color_texture_2 =
-                        texture_images.get(&layers.textures[2].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[2])).cloned();
                     out_mat.base_color_uv_0 =
                         layers.textures[0].usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                     out_mat.base_color_uv_1 =
@@ -248,7 +453,8 @@ fn build_material(
             },
             EMaterialDataId::ICAN => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
-                    out_mat.emissive_texture = texture_images.get(&texture.id).cloned();
+                    out_mat.emissive_texture =
+                        texture_images.get(&TextureImageKey::from(texture)).cloned();
                     out_mat.emissive_uv =
                         texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                 }
@@ -260,11 +466,19 @@ fn build_material(
                 }
                 _ => log::warn!("Unsupported material data type for ICNC {:?}", data.data_type),
             },
+            EMaterialDataId::ICMC => match &data.data {
+                CMaterialDataInner::Color(color) => {
+                    out_mat.emissive_unmasked_color = convert_color(color);
+                }
+                _ => log::warn!("Unsupported material data type for ICMC {:?}", data.data_type),
+            },
             EMaterialDataId::NMAP => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
                     out_mat.normal_map_l0 = Color::WHITE;
-                    out_mat.normal_map_texture_0 = texture_images.get(&texture.id).cloned();
-                    out_mat.normal_map_uv_0 = texture.usage.as_ref().unwrap().tex_coord;
+                    out_mat.normal_map_texture_0 =
+                        texture_images.get(&TextureImageKey::from(texture)).cloned();
+                    out_mat.normal_map_uv_0 =
+                        texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                 }
                 _ => {
                     log::warn!("Unsupported material data type for NMAP {:?}", data.data_type);
@@ -276,11 +490,11 @@ fn build_material(
                     out_mat.normal_map_l1 = convert_color(&layers.base.colors[1]);
                     out_mat.normal_map_l2 = convert_color(&layers.base.colors[2]);
                     out_mat.normal_map_texture_0 =
-                        texture_images.get(&layers.textures[0].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[0])).cloned();
                     out_mat.normal_map_texture_1 =
-                        texture_images.get(&layers.textures[1].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[1])).cloned();
                     out_mat.normal_map_texture_2 =
-                        texture_images.get(&layers.textures[2].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[2])).cloned();
                     out_mat.normal_map_uv_0 =
                         layers.textures[0].usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                     out_mat.normal_map_uv_1 =
@@ -295,8 +509,10 @@ fn build_material(
             EMaterialDataId::METL => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
                     out_mat.metallic_map_l0 = Color::WHITE;
-                    out_mat.metallic_map_texture_0 = texture_images.get(&texture.id).cloned();
-                    out_mat.metallic_map_uv_0 = texture.usage.as_ref().unwrap().tex_coord;
+                    out_mat.metallic_map_texture_0 =
+                        texture_images.get(&TextureImageKey::from(texture)).cloned();
+                    out_mat.metallic_map_uv_0 =
+                        texture.usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                 }
                 _ => {
                     log::warn!("Unsupported material data type for METL {:?}", data.data_type);
@@ -308,11 +524,11 @@ fn build_material(
                     out_mat.metallic_map_l1 = convert_color(&layers.base.colors[1]);
                     out_mat.metallic_map_l2 = convert_color(&layers.base.colors[2]);
                     out_mat.metallic_map_texture_0 =
-                        texture_images.get(&layers.textures[0].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[0])).cloned();
                     out_mat.metallic_map_texture_1 =
-                        texture_images.get(&layers.textures[1].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[1])).cloned();
                     out_mat.metallic_map_texture_2 =
-                        texture_images.get(&layers.textures[2].id).cloned();
+                        texture_images.get(&TextureImageKey::from(&layers.textures[2])).cloned();
                     out_mat.metallic_map_uv_0 =
                         layers.textures[0].usage.as_ref().map(|u| u.tex_coord).unwrap_or_default();
                     out_mat.metallic_map_uv_1 =
@@ -324,100 +540,18 @@ fn build_material(
                     log::warn!("Unsupported material data type for MTLL {:?}", data.data_type);
                 }
             },
+            EMaterialDataId::LITS => {
+                if let CMaterialDataInner::Scalar(value) = data.data {
+                    if value.is_finite() {
+                        out_mat.light_scale = value;
+                    }
+                }
+            }
+            EMaterialDataId::BLSM | EMaterialDataId::BSAO => {}
             id => {
                 log::warn!("Unsupported material data ID {id:?}");
             }
         }
     }
-    Ok(out_mat)
-}
-
-#[allow(dead_code)]
-fn texture_wrap(wrap: ETextureWrap) -> AddressMode {
-    match wrap {
-        ETextureWrap::ClampToEdge => AddressMode::ClampToEdge,
-        ETextureWrap::Repeat => AddressMode::Repeat,
-        ETextureWrap::MirroredRepeat => AddressMode::MirrorRepeat,
-        ETextureWrap::MirrorClamp => todo!("Mirror clamp"),
-        ETextureWrap::ClampToBorder => AddressMode::ClampToBorder,
-        ETextureWrap::Clamp => todo!("Clamp"),
-    }
-}
-
-#[allow(dead_code)]
-fn sampler_descriptor_from_usage<'desc>(
-    usage: &STextureUsageInfo,
-    data: Option<&STextureSamplerData>,
-) -> SamplerDescriptor<'desc> {
-    SamplerDescriptor {
-        label: None,
-        address_mode_u: match usage.wrap_x {
-            0 => AddressMode::ClampToEdge,
-            1 => AddressMode::Repeat,
-            2 => AddressMode::MirrorRepeat,
-            3 => todo!("Mirror clamp"),
-            4 => AddressMode::ClampToBorder,
-            5 => todo!("Clamp"),
-            -1 => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_x)),
-            n => todo!("wrap {n}"),
-        },
-        address_mode_v: match usage.wrap_y {
-            0 => AddressMode::ClampToEdge,
-            1 => AddressMode::Repeat,
-            2 => AddressMode::MirrorRepeat,
-            3 => todo!("Mirror clamp"),
-            4 => AddressMode::ClampToBorder,
-            5 => todo!("Clamp"),
-            -1 => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_y)),
-            n => todo!("wrap {n}"),
-        },
-        address_mode_w: match usage.wrap_z {
-            0 => AddressMode::ClampToEdge,
-            1 => AddressMode::Repeat,
-            2 => AddressMode::MirrorRepeat,
-            3 => todo!("Mirror clamp"),
-            4 => AddressMode::ClampToBorder,
-            5 => todo!("Clamp"),
-            -1 => data.map_or(AddressMode::Repeat, |d| texture_wrap(d.wrap_z)),
-            n => todo!("wrap {n}"),
-        },
-        mag_filter: match usage.filter {
-            0 => FilterMode::Nearest,
-            1 => FilterMode::Linear,
-            -1 => data.map_or(FilterMode::Nearest, |d| match d.filter {
-                ETextureFilter::Nearest => FilterMode::Nearest,
-                ETextureFilter::Linear => FilterMode::Linear,
-            }),
-            n => todo!("Filter {n}"),
-        },
-        min_filter: match usage.filter {
-            0 => FilterMode::Nearest,
-            1 => FilterMode::Linear,
-            -1 => data.map_or(FilterMode::Nearest, |d| match d.filter {
-                ETextureFilter::Nearest => FilterMode::Nearest,
-                ETextureFilter::Linear => FilterMode::Linear,
-            }),
-            n => todo!("Filter {n}"),
-        },
-        mipmap_filter: data.map_or(FilterMode::Nearest, |d| match d.mip_filter {
-            ETextureMipFilter::Nearest => FilterMode::Nearest,
-            ETextureMipFilter::Linear => FilterMode::Linear,
-        }),
-        lod_min_clamp: 0.0,
-        lod_max_clamp: f32::MAX,
-        compare: None,
-        anisotropy_clamp: NonZeroU8::new(
-            data.map(|d| match d.aniso {
-                ETextureAnisotropicRatio::None => 0,
-                ETextureAnisotropicRatio::Ratio1 => 1,
-                ETextureAnisotropicRatio::Ratio2 => 2,
-                ETextureAnisotropicRatio::Ratio4 => 4,
-                ETextureAnisotropicRatio::Ratio8 => 8,
-                ETextureAnisotropicRatio::Ratio16 => 16,
-            })
-            .unwrap_or_default(),
-        ),
-        // anisotropy_clamp: NonZeroU8::new(8),
-        border_color: None,
-    }
+    Ok((out_mat, warnings))
 }

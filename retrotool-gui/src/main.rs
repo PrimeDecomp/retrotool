@@ -42,10 +42,23 @@ use crate::{
 #[derive(Default, Resource)]
 struct FileOpen(Vec<PathBuf>);
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let mut file_open = FileOpen::default();
-    for arg in std::env::args_os() {
-        file_open.0.push(arg.into());
+    let mut preview = render::scene_preview::ShaderPreview::default();
+    if let Some(path) = render::scene_preview::brdf_preference_path() {
+        preview.restore_brdf_preference(path);
+    }
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--brdf-lut" {
+            let path = args.next().ok_or_else(|| anyhow::anyhow!("--brdf-lut requires a path"))?;
+            preview.request_brdf(path.into());
+        } else if arg == "--" {
+            file_open.0.extend(args.map(PathBuf::from));
+            break;
+        } else {
+            file_open.0.push(arg.into());
+        }
     }
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.05)))
@@ -58,6 +71,7 @@ fn main() {
             ..default()
         })
         .insert_resource(file_open)
+        .insert_resource(preview)
         .init_resource::<UiState>()
         .init_resource::<Packages>()
         .add_plugins(
@@ -83,6 +97,8 @@ fn main() {
         // App
         .add_plugin(RetroAssetPlugin)
         .add_plugin(MaterialPlugin::<CustomMaterial>::default())
+        .add_plugin(render::original_shader::OriginalShaderPlugin)
+        .add_plugin(render::scene_preview::ShaderPreviewPlugin)
         .add_plugin(EguiPlugin)
         .add_plugin(GridPlugin)
         // Ray casting
@@ -100,6 +116,7 @@ fn main() {
         .add_system(load_files)
         .add_system(ui_system)
         .run();
+    Ok(())
 }
 
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq)]
@@ -205,6 +222,10 @@ fn ui_system(world: &mut World) {
                         }
                     });
                     egui::menu::menu_button(ui, "View", |ui| {
+                        ui.menu_button("Shader preview", |ui| {
+                            ui.set_max_width(420.0);
+                            world.resource_mut::<render::scene_preview::ShaderPreview>().menu(ui);
+                        });
                         if ui.button("Restore default layout").clicked() {
                             close_all_tabs(world, ui_state.as_mut());
                             if ui_state.tree.is_empty() {

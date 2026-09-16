@@ -57,6 +57,40 @@ Replaces the video within the given `FMV0` file.
 $ retrotool fmv0 replace [inout_fmv0] [in_mp4]
 ```
 
+### mtrl extract
+
+Extracts shaders, material metadata, and a JSON index from `MaterialArchive.arc`
+or a cooked `.MTRL` extracted with retrotool. Add `--wgsl` to attempt experimental
+NVN shader translation.
+
+```shell
+$ retrotool mtrl extract MaterialArchive.arc shaders
+$ retrotool mtrl extract --wgsl material.MTRL material-shaders
+```
+
+### refl
+
+Prints a reflection probe's texture UUID and intensity as JSON.
+
+```shell
+$ retrotool refl probe.REFL
+```
+
+## Viewer
+
+`retrotool-gui` browses PAK assets and previews models. **View > Shader preview**
+toggles translated original shaders and controls UV animation playback.
+Unsupported materials show a fallback reason. Lighting is still a preview.
+
+Reflection materials need the game's BRDF table, selected in the same menu or
+with `--brdf-lut`; the viewer remembers successful loads.
+
+## Format documentation
+
+See [docs/](docs/README.md) for material selection, shader bindings, lighting,
+and scene relationships. Field layouts are maintained in
+[PrimeRemasterStructs](https://github.com/PrimeDecomp/PrimeRemasterStructs).
+
 ## License
 
 Licensed under either of

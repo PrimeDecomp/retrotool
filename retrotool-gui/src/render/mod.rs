@@ -1,6 +1,9 @@
 pub mod camera;
 pub mod grid;
+pub mod material_state;
 pub mod model;
+pub mod original_shader;
+pub mod scene_preview;
 
 use bevy::{prelude::*, render::primitives::Aabb};
 use retrolib::format::{CAABox, CColor4f, CTransform4f};

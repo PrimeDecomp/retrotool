@@ -27,6 +27,7 @@ pub struct LightProbeAsset {
 
 pub struct LightProbeAssetLoader {
     supported_formats: CompressedImageFormats,
+    sampler_features: wgpu_types::Features,
 }
 
 impl FromWorld for LightProbeAssetLoader {
@@ -35,7 +36,10 @@ impl FromWorld for LightProbeAssetLoader {
             Some(render_device) => CompressedImageFormats::from_features(render_device.features()),
             None => CompressedImageFormats::all(),
         };
-        Self { supported_formats }
+        let sampler_features = world
+            .get_resource::<RenderDevice>()
+            .map_or(wgpu_types::Features::empty(), RenderDevice::features);
+        Self { supported_formats, sampler_features }
     }
 }
 
@@ -53,7 +57,11 @@ impl AssetLoader for LightProbeAssetLoader {
 
             let mut textures = Vec::with_capacity(data.textures.len());
             for (idx, texture_data) in data.textures.into_iter().enumerate() {
-                let result = load_texture_asset(texture_data, &self.supported_formats)?;
+                let result = load_texture_asset(
+                    texture_data,
+                    &self.supported_formats,
+                    self.sampler_features,
+                )?;
                 let mut slice_handles = Vec::with_capacity(result.slices.len());
                 for (mip, images) in result.slices.into_iter().enumerate() {
                     let mut handles = Vec::with_capacity(images.len());
@@ -68,9 +76,11 @@ impl AssetLoader for LightProbeAssetLoader {
                 textures.push(TextureAsset {
                     asset_ref: AssetRef { id, kind: K_FORM_LTPB },
                     inner: result.inner,
-                    // 3D BC1 textures are not supported by wgpu
-                    // and we don't use the 3D texture anyway
-                    texture: default(),
+                    texture: load_context.set_labeled_asset(
+                        &format!("texture_{idx}"),
+                        LoadedAsset::new(result.texture),
+                    ),
+                    sampler_features: self.sampler_features,
                     slices: slice_handles,
                 });
             }

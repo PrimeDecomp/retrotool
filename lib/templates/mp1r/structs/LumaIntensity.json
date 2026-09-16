@@ -1,0 +1,13 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "LumaIntensity",
+  "description": "SLdrLumaIntensity; native loader7100ac49c8.",
+  "type": "property_list",
+  "properties": {
+    "0xdaf8bddf": {
+      "name": "Intensity",
+      "type": "f32",
+      "description": "Native default0. Direct multiplier of RGB; alpha is preserved."
+    }
+  }
+}

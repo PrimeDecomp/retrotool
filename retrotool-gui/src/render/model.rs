@@ -1,6 +1,6 @@
 use std::{borrow::Cow, ops::Range};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bevy::{
     prelude::*,
     render::{
@@ -27,13 +27,13 @@ use crate::{
     render::convert_aabb,
 };
 
-pub const MESH_FLAG_OPAQUE: u16 = 1;
-
 pub struct BuiltMesh {
     pub mesh: Handle<Mesh>,
     pub material_idx: usize,
     pub visible: bool,
     pub flags: u16,
+    pub mesh_class: u8,
+    pub two_sided: bool,
     pub unk_e: u16,
 }
 
@@ -87,7 +87,7 @@ pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<Built
 
     // Process meshes
     let mut out_meshes = vec![];
-    for in_mesh in mesh.meshes.iter() {
+    for (mesh_index, in_mesh) in mesh.meshes.iter().enumerate() {
         let (indices, vert_range) = match &index_buffers[in_mesh.idx_buf_idx as usize] {
             IndicesSlice::U16(indices) => {
                 let (values, range) =
@@ -111,6 +111,8 @@ pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<Built
             material_idx: in_mesh.material_idx as usize,
             visible: true,
             flags: in_mesh.unk_c,
+            mesh_class: mesh.mesh_class(mesh_index).context("Missing mesh class")?,
+            two_sided: mesh.is_two_sided(mesh_index).context("Missing mesh two-sided flags")?,
             unk_e: in_mesh.unk_e,
         });
     }
@@ -221,7 +223,7 @@ fn convert_component(
         Rg16Float => Float32x2(copy_converting(input, component, |v: [u16; 2]| v.to_f32_array())),
         Rgba8Unorm => match component.component {
             Color => Float32x4(copy_converting(input, component, |v: [u8; 4]| {
-                v.map(|u| u as f32 * 255.0)
+                v.map(|u| u as f32 / 255.0)
             })),
             _ => Unorm8x4(copy_direct(input, component)),
         },
@@ -331,4 +333,30 @@ where T: num_traits::Num + num_traits::Bounded + Copy + PartialOrd + TryInto<usi
 enum IndicesSlice<'a> {
     U16(Cow<'a, [u16]>),
     U32(Cow<'a, [u32]>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vertex_colors_preserve_unorm_endpoints_and_alpha_with_stride() {
+        let component = SVertexDataComponent {
+            buffer_index: 0,
+            offset: 2,
+            stride: 8,
+            format: EVertexDataFormat::Rgba8Unorm,
+            component: EVertexComponent::Color,
+        };
+        let bytes = [99, 99, 0, 128, 255, 255, 99, 99, 99, 99, 255, 0, 128, 0, 99, 99];
+        let (_, values) = convert_component(&bytes, &component).unwrap();
+        let VertexAttributeValues::Float32x4(values) = values else {
+            panic!("Expected float colors")
+        };
+        assert_eq!(values.len(), 2);
+        assert_eq!([values[0][0], values[0][2], values[0][3]], [0.0, 1.0, 1.0]);
+        assert_eq!([values[1][0], values[1][1], values[1][3]], [1.0, 0.0, 0.0]);
+        assert!((values[0][1] - 0.5019608).abs() < 1e-7);
+        assert!((values[1][2] - 0.5019608).abs() < 1e-7);
+    }
 }

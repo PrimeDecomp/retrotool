@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, ensure, Result};
+use flate2::{Decompress, FlushDecompress, Status};
 
 use crate::util::lzss;
 
@@ -43,4 +44,35 @@ pub fn decompress_into(compressed_data: &[u8], out: &mut [u8]) -> Result<u32> {
         bail!("Decompression failed");
     }
     Ok(mode)
+}
+
+/// Decode one complete zlib stream with exact input and output sizes.
+/// Grows with actual output instead of allocating the untrusted declared size.
+pub fn decompress_zlib_exact(compressed: &[u8], expected_size: usize) -> Result<Vec<u8>> {
+    let mut decoder = Decompress::new(true);
+    let mut decompressed = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let input_before = decoder.total_in();
+        let output_before = decoder.total_out();
+        let status = decoder.decompress(
+            &compressed[input_before as usize..],
+            &mut buffer,
+            FlushDecompress::None,
+        )?;
+        ensure!(decoder.total_out() <= expected_size as u64, "output exceeds declared size");
+        decompressed.extend_from_slice(&buffer[..(decoder.total_out() - output_before) as usize]);
+        if status == Status::StreamEnd {
+            break;
+        }
+        // The Read adapter can report EOF with a missing zlib trailer. Require
+        // StreamEnd explicitly so incomplete streams cannot pass size checks.
+        ensure!(
+            decoder.total_in() != input_before || decoder.total_out() != output_before,
+            "Truncated zlib stream"
+        );
+    }
+    ensure!(decompressed.len() == expected_size, "decompressed size mismatch");
+    ensure!(decoder.total_in() == compressed.len() as u64, "Trailing data in compressed range");
+    Ok(decompressed)
 }

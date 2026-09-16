@@ -3209,6 +3209,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "remax"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "renderdoc-sys"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3226,11 +3235,13 @@ dependencies = [
  "bytemuck",
  "ddsfile",
  "flate2",
+ "half",
  "image 0.24.9",
  "indexmap 1.9.3",
  "log",
  "memmap2",
  "mint",
+ "remax",
  "serde",
  "serde_derive",
  "serde_json",
@@ -3254,7 +3265,9 @@ dependencies = [
  "image 0.24.9",
  "log",
  "png 0.17.16",
+ "remax",
  "retrolib",
+ "serde",
  "serde_json",
  "uuid",
  "zerocopy 0.7.35",
@@ -3280,8 +3293,10 @@ dependencies = [
  "log",
  "mint",
  "num-traits",
+ "remax",
  "retrolib",
  "serde",
+ "serde_json",
  "strum",
  "uuid",
  "walkdir",

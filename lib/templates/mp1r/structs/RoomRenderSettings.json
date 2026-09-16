@@ -1,0 +1,13 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "RoomRenderSettings",
+  "description": "SLdrRoomRenderSettings::Load7100ae5d44. Native storage is one boolean byte.",
+  "type": "property_list",
+  "properties": {
+    "0x71a12a41": {
+      "name": "Unknown Render Flag",
+      "type": "bool",
+      "description": "Native default false; any nonzero byte becomes true. Consumer meaning is unresolved."
+    }
+  }
+}

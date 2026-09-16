@@ -5,6 +5,8 @@ use bevy::{
     render::{mesh::*, render_resource::*},
 };
 
+use crate::render::material_state::MaterialRenderState;
+
 // A "high" random id should be used for custom attributes to ensure consistent sorting and avoid collisions with other attributes.
 // See the MeshVertexAttribute docs for more info.
 pub const ATTRIBUTE_UV_1: MeshVertexAttribute =
@@ -18,6 +20,26 @@ pub const ATTRIBUTE_TANGENT_1: MeshVertexAttribute =
 pub const ATTRIBUTE_TANGENT_2: MeshVertexAttribute =
     MeshVertexAttribute::new("Vertex_Tangent_2", 988540921, VertexFormat::Float32x4);
 
+/// Surface equations verified against specific cooked shader programs.
+/// Preview light inputs and indirect lighting remain supplied by the viewer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MprSurfaceProfile {
+    #[default]
+    Approximate,
+    LayeredVine,
+    SingleVine,
+}
+
+impl MprSurfaceProfile {
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Approximate => "Approximate viewer shading",
+            Self::LayeredVine => "Recovered layered vine surface and direct-light BRDF",
+            Self::SingleVine => "Recovered single-map vine surface and direct-light BRDF",
+        }
+    }
+}
+
 // This is the struct that will be passed to your shader
 #[derive(AsBindGroup, Reflect, FromReflect, Debug, Clone, TypeUuid)]
 #[uuid = "f690fdae-d598-45ab-8225-97e2a3f056e0"]
@@ -25,7 +47,9 @@ pub const ATTRIBUTE_TANGENT_2: MeshVertexAttribute =
 #[reflect(Default, Debug)]
 pub struct CustomMaterial {
     #[reflect(ignore)]
-    pub cull_mode: Option<Face>,
+    pub surface_profile: MprSurfaceProfile,
+    #[reflect(ignore)]
+    pub render_state: MaterialRenderState,
     #[reflect(ignore)]
     pub alpha_mode: AlphaMode,
     #[uniform(0)]
@@ -100,12 +124,24 @@ pub struct CustomMaterial {
     pub emissive_uv: u32,
     #[uniform(0)]
     pub emissive_color: Color,
+    #[uniform(0)]
+    pub emissive_unmasked_color: Color,
+    #[uniform(0)]
+    pub layer_smoothness: f32,
+    #[uniform(0)]
+    pub layer_scales: Vec4,
+    #[uniform(0)]
+    pub light_scale: f32,
 }
 
 impl Default for CustomMaterial {
     fn default() -> Self {
         Self {
-            cull_mode: Some(Face::Back),
+            surface_profile: MprSurfaceProfile::Approximate,
+            layer_smoothness: 1.0,
+            layer_scales: Vec4::new(1.0, 0.0, 1.0, 0.0),
+            light_scale: 1.0,
+            render_state: MaterialRenderState::default(),
             alpha_mode: AlphaMode::Opaque,
             base_color: Color::WHITE,
             base_color_texture_0: None,
@@ -138,17 +174,21 @@ impl Default for CustomMaterial {
             emissive_texture: None,
             emissive_uv: 0,
             emissive_color: Color::NONE,
+            emissive_unmasked_color: Color::NONE,
         }
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CustomMaterialKey {
-    pub cull_mode: Option<Face>,
+    surface_profile: MprSurfaceProfile,
+    pub render_state: MaterialRenderState,
 }
 
 impl From<&CustomMaterial> for CustomMaterialKey {
-    fn from(material: &CustomMaterial) -> Self { Self { cull_mode: material.cull_mode } }
+    fn from(material: &CustomMaterial) -> Self {
+        Self { render_state: material.render_state, surface_profile: material.surface_profile }
+    }
 }
 
 impl Material for CustomMaterial {
@@ -167,6 +207,34 @@ impl Material for CustomMaterial {
     ) -> Result<(), SpecializedMeshPipelineError> {
         let mut shader_defs = Vec::<ShaderDefVal>::new();
         let mut vertex_attributes = Vec::new();
+        let profile = key.bind_group_data.surface_profile;
+        let skinned = layout.contains(Mesh::ATTRIBUTE_JOINT_INDEX)
+            && layout.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT);
+        if profile != MprSurfaceProfile::Approximate
+            && !skinned
+            && [
+                Mesh::ATTRIBUTE_NORMAL,
+                Mesh::ATTRIBUTE_TANGENT,
+                Mesh::ATTRIBUTE_COLOR,
+                Mesh::ATTRIBUTE_UV_0,
+            ]
+            .iter()
+            .all(|a| layout.contains(a.clone()))
+            && (profile != MprSurfaceProfile::LayeredVine
+                || (layout.contains(ATTRIBUTE_TANGENT_1) && layout.contains(ATTRIBUTE_UV_1)))
+        {
+            let mode = match profile {
+                MprSurfaceProfile::LayeredVine => "MPR_RECOVERED_LAYERED",
+                MprSurfaceProfile::SingleVine => "MPR_RECOVERED_SINGLE",
+                MprSurfaceProfile::Approximate => unreachable!(),
+            };
+            for define in ["MPR_RECOVERED_SURFACE", mode] {
+                descriptor.vertex.shader_defs.push(define.into());
+                if let Some(fragment) = descriptor.fragment.as_mut() {
+                    fragment.shader_defs.push(define.into());
+                }
+            }
+        }
         let mut add_attribute = |attr: MeshVertexAttribute, location: u32, define: &str| {
             if layout.contains(attr.clone()) {
                 shader_defs.push(ShaderDefVal::from(define));
@@ -184,9 +252,7 @@ impl Material for CustomMaterial {
         add_attribute(ATTRIBUTE_TANGENT_2, 8, "VERTEX_TANGENTS_2");
         add_attribute(Mesh::ATTRIBUTE_COLOR, 9, "VERTEX_COLORS");
 
-        if layout.contains(Mesh::ATTRIBUTE_JOINT_INDEX)
-            && layout.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT)
-        {
+        if skinned {
             shader_defs.push(ShaderDefVal::from("SKINNED"));
             vertex_attributes.push(Mesh::ATTRIBUTE_JOINT_INDEX.at_shader_location(10));
             vertex_attributes.push(Mesh::ATTRIBUTE_JOINT_WEIGHT.at_shader_location(11));
@@ -196,7 +262,24 @@ impl Material for CustomMaterial {
         descriptor.vertex.buffers = vec![vertex_buffer_layout];
         descriptor.vertex.shader_defs.append(&mut shader_defs.clone());
         descriptor.fragment.as_mut().unwrap().shader_defs.append(&mut shader_defs);
-        descriptor.primitive.cull_mode = key.bind_group_data.cull_mode;
+        let state = key.bind_group_data.render_state;
+        descriptor.primitive.cull_mode = state.cull_mode;
+        descriptor.primitive.front_face = state.front_face;
+        if let Some(target) = descriptor
+            .fragment
+            .as_mut()
+            .and_then(|f| f.targets.first_mut())
+            .and_then(Option::as_mut)
+        {
+            target.blend = state.blend;
+            target.write_mask = state.color_writes;
+        }
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_compare = state.depth_compare;
+            depth.depth_write_enabled = state.depth_write;
+        }
+        descriptor.multisample.alpha_to_coverage_enabled =
+            state.alpha_to_coverage && descriptor.multisample.count > 1;
         Ok(())
     }
 }

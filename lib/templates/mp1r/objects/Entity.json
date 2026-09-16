@@ -4,6 +4,7 @@
   "type": "struct",
   "elements": [
     {
+      "name": "Active",
       "type": "bool"
     },
     {

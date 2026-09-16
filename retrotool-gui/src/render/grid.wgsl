@@ -58,21 +58,14 @@ fn grid(pos: vec3<f32>, scale: f32, axis: bool) -> vec4<f32> {
     return color;
 }
 
-struct FragmentOutput {
-    @builtin(frag_depth) depth: f32,
-    @location(0) color: vec4<f32>,
-}
-
 const NEAR = 0.0005;
 
 @fragment
-fn fragment(in: VertexOutput) -> FragmentOutput {
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t = -in.near.y / (in.far.y - in.near.y);
     let pos = in.near + t * (in.far - in.near);
     let color = (grid(pos, 1.0, false) + grid(pos, 0.1, true)) * f32(t > 0.0);
     let clip = view.view_proj * vec4<f32>(pos.xyz, 1.0);
-    var out = FragmentOutput();
-    out.depth = clip.z / clip.w;
-    out.color = color * (1.0 - NEAR / out.depth);
-    return out;
+    let depth = clip.z / clip.w;
+    return color * (1.0 - NEAR / depth);
 }
