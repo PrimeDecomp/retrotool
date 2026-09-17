@@ -21,6 +21,9 @@ use crate::{
     },
 };
 
+mod modcon;
+pub use modcon::{ModConProperties, MODCON_COMPONENT};
+
 // Room
 pub const K_FORM_ROOM: FourCC = FourCC(*b"ROOM");
 
@@ -142,6 +145,31 @@ impl SGameAreaMetaData {
 #[cfg(test)]
 mod metadata_tests {
     use super::*;
+
+    #[test]
+    fn empty_string_pools_omit_the_length_word() {
+        use binrw::BinWrite;
+
+        // SkipStringPoolInStream reads (unknown, count) and then count
+        // size-prefixed pools. The gallery's empty ROOM has two zero counts.
+        for first in [Vec::new(), b"abc".to_vec()] {
+            let mut bytes = 0u32.to_le_bytes().to_vec();
+            bytes.extend(u32::from(!first.is_empty()).to_le_bytes());
+            if !first.is_empty() {
+                bytes.extend((first.len() as u32).to_le_bytes());
+                bytes.extend(&first);
+            }
+            bytes.extend([0; 8]);
+            let mut reader = Cursor::new(&bytes);
+            let pool: StringPool = reader.read_le().unwrap();
+            assert_eq!(reader.position(), bytes.len() as u64);
+            assert_eq!(pool.pool_data, first);
+            assert!(pool.unk_pool_data.is_empty());
+            let mut writer = Cursor::new(Vec::new());
+            pool.write_le(&mut writer).unwrap();
+            assert_eq!(writer.into_inner(), bytes);
+        }
+    }
 
     #[test]
     fn metadata_bounds_threshold_matches_native_loader() {
@@ -301,6 +329,14 @@ pub struct ComponentProperties {
 }
 
 impl ComponentProperties {
+    pub fn modcon(&self) -> Result<Option<ModConProperties>> {
+        if self.component_type == MODCON_COMPONENT {
+            ModConProperties::parse(&self.data).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn entity(&self) -> Result<Option<EntityProperties>> {
         if self.component_type == super::script_links::ENTITY_COMPONENT {
             EntityProperties::parse(&self.data).map(Some)
@@ -330,6 +366,17 @@ impl ComponentProperties {
     ) -> Result<Option<super::room_lighting::RoomControllerProperties>> {
         if self.component_type == super::room_lighting::ROOM_CONTROLLER_COMPONENT {
             super::room_lighting::RoomControllerProperties::parse(&self.data).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn baked_lighting_priority_modifier(
+        &self,
+    ) -> Result<Option<super::room_lighting::BakedLightingPriorityModifierProperties>> {
+        if self.component_type == super::room_lighting::BAKED_LIGHTING_PRIORITY_MODIFIER_COMPONENT {
+            super::room_lighting::BakedLightingPriorityModifierProperties::parse(&self.data)
+                .map(Some)
         } else {
             Ok(None)
         }
@@ -643,13 +690,20 @@ pub struct StringPool {
     pub unk1: u32,
     pub num_strings: u32,
     #[br(if(num_strings > 0))]
+    #[bw(if(*num_strings > 0))]
     pub pool_len: u32,
-    #[br(if(num_strings > 0), count = pool_len)]
+    #[br(if(num_strings > 0))]
+    #[bw(if(*num_strings > 0))]
+    #[br(count = pool_len)]
     pub pool_data: Vec<u8>,
     // Unused StringPool struct
     pub unk2: u32,
     pub unk3: u32,
+    #[br(if(unk3 > 0))]
+    #[bw(if(*unk3 > 0))]
     pub unk_pool_len: u32,
+    #[br(if(unk3 > 0))]
+    #[bw(if(*unk3 > 0))]
     #[br(count = unk_pool_len)]
     pub unk_pool_data: Vec<u8>,
 }

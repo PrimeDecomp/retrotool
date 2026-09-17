@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use remax::maxwell::graphics::ColorOutputRouting;
 use retrolib::format::material_features::{
     BlendState as MprBlendState, BlendTarget, GraphicsState,
 };
@@ -53,6 +54,22 @@ pub fn mesh_draw_state(class: u8, two_sided: bool, mirrored: bool) -> Result<Gra
 }
 
 impl MaterialRenderState {
+    /// Derive shader output routing from the effective blend equations. Min/max
+    /// factors have already been canonicalized because they do not participate.
+    pub fn color_routing(&self) -> ColorOutputRouting {
+        let dual_source = self.blend.is_some_and(|blend| {
+            [blend.color, blend.alpha].iter().any(|component| {
+                component.src_factor.ref_second_blend_source()
+                    || component.dst_factor.ref_second_blend_source()
+            })
+        });
+        if dual_source {
+            ColorOutputRouting::DualSource
+        } else {
+            ColorOutputRouting::Attachments
+        }
+    }
+
     /// Apply supported fields and return explicit diagnostics for unsupported
     /// state. A target omitted by a blend/color mask keeps the existing value.
     pub fn apply(&mut self, state: &GraphicsState) -> Vec<String> {
@@ -176,7 +193,10 @@ fn convert_blend(target: &BlendTarget) -> Result<Option<BlendState>> {
                     BlendFactor::Zero
                 }
             }
-            15..=18 => bail!("Dual-source blending is unavailable in the current viewer backend"),
+            15 => BlendFactor::Src1,
+            16 => BlendFactor::OneMinusSrc1,
+            17 => BlendFactor::Src1Alpha,
+            18 => BlendFactor::OneMinusSrc1Alpha,
             _ => BlendFactor::One,
         })
     }
@@ -213,4 +233,63 @@ fn convert_blend(target: &BlendTarget) -> Result<Option<BlendState>> {
             true,
         )?,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_secondary_blend_factors_select_dual_source_routing() {
+        for (native, expected) in [
+            (15, BlendFactor::Src1),
+            (16, BlendFactor::OneMinusSrc1),
+            (17, BlendFactor::Src1Alpha),
+            (18, BlendFactor::OneMinusSrc1Alpha),
+        ] {
+            for alpha in [false, true] {
+                let mut target = BlendTarget::from_preset(0).unwrap();
+                if alpha {
+                    target.alpha_destination = native;
+                } else {
+                    target.color_destination = native;
+                }
+                let blend = convert_blend(&target).unwrap().unwrap();
+                let component = if alpha { blend.alpha } else { blend.color };
+                assert_eq!(component.dst_factor, expected);
+                let state = MaterialRenderState { blend: Some(blend), ..Default::default() };
+                assert_eq!(state.color_routing(), ColorOutputRouting::DualSource);
+            }
+        }
+    }
+
+    #[test]
+    fn glass_override_replaces_mesh_blending_and_min_max_ignore_factors() {
+        let bound = mesh_draw_state(1, false, false).unwrap();
+        let mut state = MaterialRenderState::default();
+        assert!(state.apply(&bound).is_empty());
+        assert_eq!(state.color_routing(), ColorOutputRouting::Attachments);
+        let mut overrides = GraphicsState {
+            flags: 1,
+            blend: Some(MprBlendState::from_preset(10).unwrap()),
+            ..Default::default()
+        };
+        assert!(state.apply(&overrides).is_empty());
+        assert_eq!(state.color_routing(), ColorOutputRouting::DualSource);
+        let blend = state.blend.unwrap();
+        assert_eq!(blend.color.src_factor, BlendFactor::One);
+        assert_eq!(blend.color.dst_factor, BlendFactor::OneMinusSrc1);
+        assert_eq!(blend.alpha, BlendComponent::OVER);
+        // Preset metadata and ignored factors cannot determine output routing.
+        for equation in [1, 2] {
+            overrides.blend.as_mut().unwrap().targets[0].color_equation = equation;
+            assert!(state.apply(&overrides).is_empty());
+            assert_eq!(state.color_routing(), ColorOutputRouting::Attachments);
+        }
+        // A target mask excluding RT0 preserves the preceding draw state.
+        overrides.blend.as_mut().unwrap().target_mask = 0;
+        let before = state;
+        assert!(state.apply(&overrides).is_empty());
+        assert_eq!(state, before);
+    }
 }

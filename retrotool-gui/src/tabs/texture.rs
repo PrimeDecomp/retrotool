@@ -43,7 +43,7 @@ impl UiTexture {
         let width = image.texture_descriptor.size.width;
         let height = image.texture_descriptor.size.height;
         let handle = images.add(image);
-        let weak_handle = handle.clone_weak();
+        let weak_handle = bevy_egui::EguiTextureHandle::Weak(handle.id());
         Self { _image: handle, texture_id: textures.add_image(weak_handle), width, height }
     }
 
@@ -55,16 +55,16 @@ impl UiTexture {
         let image = images.get(&handle)?;
         let width = image.texture_descriptor.size.width;
         let height = image.texture_descriptor.size.height;
-        let weak_handle = handle.clone_weak();
+        let weak_handle = bevy_egui::EguiTextureHandle::Weak(handle.id());
         Some(Self { _image: handle, texture_id: textures.add_image(weak_handle), width, height })
     }
 
     #[allow(dead_code)]
-    pub fn image(&self) -> egui::Image {
-        egui::Image::new(self.texture_id, egui::Vec2::new(self.width as f32, self.height as f32))
+    pub fn image(&self) -> egui::Image<'_> {
+        egui::Image::new((self.texture_id, egui::Vec2::new(self.width as f32, self.height as f32)))
     }
 
-    pub fn image_scaled(&self, max_size: f32) -> egui::Image {
+    pub fn image_scaled(&self, max_size: f32) -> egui::Image<'_> {
         let size = if self.height > self.width {
             let ratio = max_size / self.height as f32;
             egui::Vec2::new(self.width as f32 * ratio, max_size)
@@ -72,7 +72,7 @@ impl UiTexture {
             let ratio = max_size / self.width as f32;
             egui::Vec2::new(max_size, self.height as f32 * ratio)
         };
-        egui::Image::new(self.texture_id, size)
+        egui::Image::new((self.texture_id, size))
     }
 }
 
@@ -94,7 +94,8 @@ impl EditorTabSystem for TextureTab {
         for mip in &asset.slices {
             let mut texture_ids = Vec::with_capacity(mip.len());
             for image in mip {
-                texture_ids.push(egui_textures.add_image(image.clone_weak()));
+                texture_ids
+                    .push(egui_textures.add_image(bevy_egui::EguiTextureHandle::Weak(image.id())));
             }
             let size = mip
                 .first()
@@ -119,18 +120,14 @@ impl EditorTabSystem for TextureTab {
 
         ui.label(format!("{} {}", self.asset_ref.kind, self.asset_ref.id));
 
-        match server.get_load_state(&self.handle) {
+        match server.load_state(&self.handle) {
             LoadState::NotLoaded | LoadState::Loading => {
                 ui.spinner();
                 return;
             }
             LoadState::Loaded => {}
-            LoadState::Failed => {
+            LoadState::Failed(_) => {
                 ui.colored_label(egui::Color32::RED, "Loading failed");
-                return;
-            }
-            LoadState::Unloaded => {
-                ui.colored_label(egui::Color32::RED, "Unloaded");
                 return;
             }
         };
@@ -166,7 +163,7 @@ impl EditorTabSystem for TextureTab {
                 |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32, flip: bool| {
                     let min = rect.min + size * egui::Vec2::new(x as f32, y as f32);
                     let y_range = if flip { 1.0..=0.0 } else { 0.0..=1.0 };
-                    egui::widgets::Image::new(mip.texture_ids[i], size)
+                    egui::widgets::Image::new((mip.texture_ids[i], size))
                         .uv(egui::Rect::from_x_y_ranges(0.0..=1.0, y_range))
                         .paint_at(ui, egui::Rect::from_min_size(min, size));
                 };

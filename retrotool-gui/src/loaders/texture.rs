@@ -1,15 +1,13 @@
-use std::num::NonZeroU8;
-
 use anyhow::{anyhow, Error, Result};
 use bevy::{
-    asset::{AssetLoader, BoxedFuture, LoadContext, LoadedAsset},
+    asset::{io::Reader, AssetLoader, LoadContext},
+    image::{CompressedImageFormats, ImageSampler},
     prelude::*,
     render::{
         render_resource::{
             Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
         },
         renderer::RenderDevice,
-        texture::{CompressedImageFormats, ImageSampler},
     },
 };
 use retrolib::format::{
@@ -26,8 +24,7 @@ use zerocopy::LittleEndian;
 
 use crate::AssetRef;
 
-#[derive(Debug, Clone, bevy::reflect::TypeUuid)]
-#[uuid = "83269869-1209-408e-8835-bc6f2496e828"]
+#[derive(Debug, Clone, Asset, TypePath)]
 pub struct TextureAsset {
     #[allow(unused)]
     pub asset_ref: AssetRef,
@@ -37,6 +34,7 @@ pub struct TextureAsset {
     pub slices: Vec<Vec<Handle<Image>>>, // [mip][layer]
 }
 
+#[derive(TypePath)]
 pub struct TextureAssetLoader {
     supported_formats: CompressedImageFormats,
     sampler_features: Features,
@@ -55,39 +53,42 @@ impl FromWorld for TextureAssetLoader {
 }
 
 impl AssetLoader for TextureAssetLoader {
-    fn load<'a>(
-        &'a self,
-        bytes: &'a [u8],
-        load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<(), Error>> {
-        Box::pin(async move {
-            let id = locate_asset_id::<LittleEndian>(bytes)?;
-            let meta = locate_meta::<LittleEndian>(bytes)?;
-            let data = TextureData::<LittleEndian>::slice(bytes, meta)?;
-            info!("Loading texture {} {:?}", id, data.head);
+    type Asset = TextureAsset;
+    type Error = Error;
+    type Settings = ();
 
-            let result = load_texture_asset(data, &self.supported_formats, self.sampler_features)?;
-            let image_handle =
-                load_context.set_labeled_asset("image", LoadedAsset::new(result.texture));
-            let mut slice_handles = Vec::with_capacity(result.slices.len());
-            for (mip, images) in result.slices.into_iter().enumerate() {
-                let mut handles = Vec::with_capacity(images.len());
-                for (layer, image) in images.into_iter().enumerate() {
-                    handles.push(load_context.set_labeled_asset(
-                        &format!("mip_{}_layer_{}", mip, layer),
-                        LoadedAsset::new(image),
-                    ));
-                }
-                slice_handles.push(handles);
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        load_context: &mut LoadContext<'_>,
+    ) -> anyhow::Result<Self::Asset, Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        let bytes = bytes.as_slice();
+        let id = locate_asset_id::<LittleEndian>(bytes)?;
+        let meta = locate_meta::<LittleEndian>(bytes)?;
+        let data = TextureData::<LittleEndian>::slice(bytes, meta)?;
+        info!("Loading texture {} {:?}", id, data.head);
+
+        let result = load_texture_asset(data, &self.supported_formats, self.sampler_features)?;
+        let image_handle = load_context.add_labeled_asset("image", result.texture);
+        let mut slice_handles = Vec::with_capacity(result.slices.len());
+        for (mip, images) in result.slices.into_iter().enumerate() {
+            let mut handles = Vec::with_capacity(images.len());
+            for (layer, image) in images.into_iter().enumerate() {
+                handles.push(
+                    load_context.add_labeled_asset(format!("mip_{mip}_layer_{layer}"), image),
+                );
             }
-            load_context.set_default_asset(LoadedAsset::new(TextureAsset {
-                asset_ref: AssetRef { id, kind: K_FORM_TXTR },
-                inner: result.inner,
-                texture: image_handle,
-                sampler_features: self.sampler_features,
-                slices: slice_handles,
-            }));
-            Ok(())
+            slice_handles.push(handles);
+        }
+        Ok(TextureAsset {
+            asset_ref: AssetRef { id, kind: K_FORM_TXTR },
+            inner: result.inner,
+            texture: image_handle,
+            sampler_features: self.sampler_features,
+            slices: slice_handles,
         })
     }
 
@@ -116,8 +117,8 @@ pub fn load_texture_asset(
     // the dimensions changes normalized sampling and every mip's logical size.
     // Decode these images to preserve their actual texel dimensions instead.
     let supported = texture_format_supported(data.head.kind, format, supported_formats)
-        && data.head.width % u32::from(bw) == 0
-        && data.head.height % u32::from(bh) == 0;
+        && data.head.width.is_multiple_of(u32::from(bw))
+        && data.head.height.is_multiple_of(u32::from(bh));
 
     let mut images = Vec::with_capacity(slices.len());
     for mip in &slices {
@@ -145,9 +146,17 @@ pub fn load_texture_asset(
                         slice.height,
                     )
                 } else {
-                    Image::from_dynamic(
-                        decompress_image(data.head.format, slice.width, slice.height, slice_data)?,
-                        is_srgb,
+                    texture_slice_to_image(
+                        if is_srgb {
+                            TextureFormat::Rgba8UnormSrgb
+                        } else {
+                            TextureFormat::Rgba8Unorm
+                        },
+                        decompress_image(data.head.format, slice.width, slice.height, slice_data)?
+                            .into_rgba8()
+                            .into_raw(),
+                        slice.width,
+                        slice.height,
                     )
                 },
             );
@@ -170,10 +179,13 @@ pub fn load_texture_asset(
         )
     };
     let mut texture = texture_to_image(&data, format, image_data)?;
-    texture.sampler_descriptor = ImageSampler::Descriptor(sampler_descriptor(
-        &TextureSamplerParams::from_header(&data.head.sampler_data),
-        sampler_features,
-    ));
+    texture.sampler = ImageSampler::Descriptor(
+        sampler_descriptor(
+            &TextureSamplerParams::from_header(&data.head.sampler_data),
+            sampler_features,
+        )
+        .into(),
+    );
     Ok(LoadTextureResult { inner: data, texture, slices: images })
 }
 
@@ -181,10 +193,18 @@ pub fn load_texture_asset(
 // Volumes instead contain all depth slices of one mip before the next mip.
 fn decoded_texture_bytes(images: &[Vec<Image>], kind: ETextureType) -> Vec<u8> {
     if kind == ETextureType::D3 {
-        images.iter().flatten().flat_map(|i| i.data.iter().copied()).collect()
+        images
+            .iter()
+            .flatten()
+            .flat_map(|i| i.data.as_deref().unwrap_or_default().iter().copied())
+            .collect()
     } else {
         (0..images.first().map_or(0, Vec::len))
-            .flat_map(|layer| images.iter().flat_map(move |mip| mip[layer].data.iter().copied()))
+            .flat_map(|layer| {
+                images.iter().flat_map(move |mip| {
+                    mip[layer].data.as_deref().unwrap_or_default().iter().copied()
+                })
+            })
             .collect()
     }
 }
@@ -192,7 +212,7 @@ fn decoded_texture_bytes(images: &[Vec<Image>], kind: ETextureType) -> Vec<u8> {
 /// Create an [Image] from a 2D texture slice.
 fn texture_slice_to_image(format: TextureFormat, data: Vec<u8>, width: u32, height: u32) -> Image {
     Image {
-        data,
+        data: Some(data),
         texture_descriptor: TextureDescriptor {
             label: None,
             size: Extent3d { width, height, depth_or_array_layers: 1 },
@@ -203,7 +223,7 @@ fn texture_slice_to_image(format: TextureFormat, data: Vec<u8>, width: u32, heig
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         },
-        sampler_descriptor: DEFAULT_SAMPLER,
+        sampler: default_sampler(),
         ..default()
     }
 }
@@ -214,25 +234,28 @@ fn texture_format_supported(
     supported_formats: &CompressedImageFormats,
 ) -> bool {
     supported_formats.supports(format)
-        // wgpu 0.15 permits compressed allocations only with dimension D2.
+        // Keep volumes decoded unless the device enables sliced 3D compression.
         // In particular, BCn probe volumes must be decoded even with BC support.
-        && !(wgpu_dimension(kind) != TextureDimension::D2 && format.describe().is_compressed())
+        // Removal: docs/rendering-compatibility.md#compressed-volume-textures.
+        && !(wgpu_dimension(kind) != TextureDimension::D2 && format.is_compressed())
 }
 
-const DEFAULT_SAMPLER: ImageSampler = ImageSampler::Descriptor(SamplerDescriptor {
-    label: None,
-    address_mode_u: AddressMode::Repeat,
-    address_mode_v: AddressMode::Repeat,
-    address_mode_w: AddressMode::Repeat,
-    mag_filter: FilterMode::Linear,
-    min_filter: FilterMode::Linear,
-    mipmap_filter: FilterMode::Linear,
-    lod_min_clamp: 0.0,
-    lod_max_clamp: f32::MAX,
-    compare: None,
-    anisotropy_clamp: NonZeroU8::new(8),
-    border_color: None,
-});
+fn default_sampler() -> ImageSampler {
+    ImageSampler::Descriptor(
+        SamplerDescriptor {
+            address_mode_u: AddressMode::Repeat,
+            address_mode_v: AddressMode::Repeat,
+            address_mode_w: AddressMode::Repeat,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            lod_max_clamp: f32::MAX,
+            anisotropy_clamp: 8,
+            ..Default::default()
+        }
+        .into(),
+    )
+}
 
 /// Convert the recovered base sampler to wgpu. MirrorClamp has no native wgpu
 /// equivalent; ClampToBorder additionally needs an enabled device feature.
@@ -268,14 +291,16 @@ pub fn sampler_descriptor(
         address_mode_w: wrap[2],
         mag_filter: if mag == 1 { FilterMode::Linear } else { FilterMode::Nearest },
         min_filter: if min == 3 || min == 5 { FilterMode::Linear } else { FilterMode::Nearest },
-        mipmap_filter: if min == 4 || min == 5 { FilterMode::Linear } else { FilterMode::Nearest },
+        mipmap_filter: if min == 4 || min == 5 {
+            wgpu::MipmapFilterMode::Linear
+        } else {
+            wgpu::MipmapFilterMode::Nearest
+        },
         lod_min_clamp: params.lod_min,
         lod_max_clamp: params.lod_max,
         compare: None, // TXTR and serialized usage do not specify comparison.
-        // Some(1) still enables anisotropy on wgpu's Vulkan backend. Native
-        // max-anisotropy 1 means isotropic sampling, including one-mip views.
-        anisotropy_clamp: (params.max_anisotropy() > 1)
-            .then(|| NonZeroU8::new(params.max_anisotropy()).unwrap()),
+        // wgpu 29 uses 1 for isotropic sampling, matching NVN.
+        anisotropy_clamp: u16::from(params.max_anisotropy()),
         border_color: match params.border {
             // Native SetDefaults (SDK+4737c0) initializes all four channels to
             // +0. Engine border -1 leaves these values unchanged.
@@ -294,7 +319,7 @@ fn texture_to_image(
     image_data: Vec<u8>,
 ) -> Result<Image> {
     Ok(Image {
-        data: image_data,
+        data: Some(image_data),
         texture_descriptor: TextureDescriptor {
             label: None,
             size: Extent3d {
@@ -309,7 +334,7 @@ fn texture_to_image(
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         },
-        sampler_descriptor: DEFAULT_SAMPLER,
+        sampler: default_sampler(),
         ..default()
     })
 }
@@ -346,7 +371,7 @@ fn wgpu_format(format: ETextureFormat) -> Option<TextureFormat> {
         ETextureFormat::RgbaBc4Snorm => Bc4RSnorm,
         ETextureFormat::RgbaBc5Unorm => Bc5RgUnorm,
         ETextureFormat::RgbaBc5Snorm => Bc5RgSnorm,
-        ETextureFormat::Rg11B10Float => Rg11b10Float,
+        ETextureFormat::Rg11B10Float => Rg11b10Ufloat,
         ETextureFormat::R32Float => R32Float,
         ETextureFormat::Rg8Unorm => Rg8Unorm,
         ETextureFormat::Rg8Snorm => Rg8Snorm,
@@ -368,7 +393,7 @@ fn wgpu_format(format: ETextureFormat) -> Option<TextureFormat> {
         ETextureFormat::Rgba32Uint => Rgba32Uint,
         ETextureFormat::Rgba32Sint => Rgba32Sint,
         ETextureFormat::BptcUfloat => Bc6hRgbUfloat,
-        ETextureFormat::BptcSfloat => Bc6hRgbSfloat,
+        ETextureFormat::BptcSfloat => Bc6hRgbFloat,
         ETextureFormat::BptcUnorm => Bc7RgbaUnorm,
         ETextureFormat::BptcUnormSrgb => Bc7RgbaUnormSrgb,
         ETextureFormat::RgbaAstc4x4 => Astc { block: B4x4, channel: Unorm },
@@ -424,13 +449,13 @@ mod tests {
         for filter in [0, 1] {
             let mut params = TextureSamplerParams::simple(filter, [0; 3], 0);
             let sampler = sampler_descriptor(&params, Features::empty());
-            assert_eq!(sampler.anisotropy_clamp, None);
+            assert_eq!(sampler.anisotropy_clamp, 1);
             assert_eq!(sampler.min_filter, sampler.mag_filter);
             for (mode, maximum) in [(1, 2), (2, 4), (3, 8), (4, 16)] {
                 params.anisotropy = mode;
                 assert_eq!(
                     sampler_descriptor(&params, Features::empty()).anisotropy_clamp,
-                    NonZeroU8::new(maximum)
+                    maximum
                 );
             }
         }
@@ -438,7 +463,7 @@ mod tests {
 
     #[test]
     fn decoded_array_upload_is_layer_major_but_volume_upload_is_mip_major() {
-        let image = |value| Image { data: vec![value; 4], ..default() };
+        let image = |value| Image { data: Some(vec![value; 4]), ..default() };
         let images = vec![vec![image(1), image(2)], vec![image(3), image(4)]];
         assert_eq!(decoded_texture_bytes(&images, ETextureType::D2Array), [
             1, 1, 1, 1, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4

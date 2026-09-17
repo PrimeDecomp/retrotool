@@ -1,8 +1,9 @@
 use bevy::{
+    mesh::*,
     pbr::*,
     prelude::*,
-    reflect::TypeUuid,
-    render::{mesh::*, render_resource::*},
+    render::render_resource::*,
+    shader::{ShaderDefVal, ShaderRef},
 };
 
 use crate::render::material_state::MaterialRenderState;
@@ -41,8 +42,7 @@ impl MprSurfaceProfile {
 }
 
 // This is the struct that will be passed to your shader
-#[derive(AsBindGroup, Reflect, FromReflect, Debug, Clone, TypeUuid)]
-#[uuid = "f690fdae-d598-45ab-8225-97e2a3f056e0"]
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 #[bind_group_data(CustomMaterialKey)]
 #[reflect(Default, Debug)]
 pub struct CustomMaterial {
@@ -53,7 +53,7 @@ pub struct CustomMaterial {
     #[reflect(ignore)]
     pub alpha_mode: AlphaMode,
     #[uniform(0)]
-    pub base_color: Color,
+    pub base_color: LinearRgba,
     #[texture(1)]
     #[sampler(2)]
     pub base_color_texture_0: Option<Handle<Image>>,
@@ -70,11 +70,11 @@ pub struct CustomMaterial {
     #[uniform(0)]
     pub base_color_uv_2: u32,
     #[uniform(0)]
-    pub base_color_l0: Color,
+    pub base_color_l0: LinearRgba,
     #[uniform(0)]
-    pub base_color_l1: Color,
+    pub base_color_l1: LinearRgba,
     #[uniform(0)]
-    pub base_color_l2: Color,
+    pub base_color_l2: LinearRgba,
     #[texture(7)]
     #[sampler(8)]
     pub normal_map_texture_0: Option<Handle<Image>>,
@@ -91,11 +91,11 @@ pub struct CustomMaterial {
     #[uniform(0)]
     pub normal_map_uv_2: u32,
     #[uniform(0)]
-    pub normal_map_l0: Color,
+    pub normal_map_l0: LinearRgba,
     #[uniform(0)]
-    pub normal_map_l1: Color,
+    pub normal_map_l1: LinearRgba,
     #[uniform(0)]
-    pub normal_map_l2: Color,
+    pub normal_map_l2: LinearRgba,
     #[texture(13)]
     #[sampler(14)]
     pub metallic_map_texture_0: Option<Handle<Image>>,
@@ -112,20 +112,20 @@ pub struct CustomMaterial {
     #[uniform(0)]
     pub metallic_map_uv_2: u32,
     #[uniform(0)]
-    pub metallic_map_l0: Color,
+    pub metallic_map_l0: LinearRgba,
     #[uniform(0)]
-    pub metallic_map_l1: Color,
+    pub metallic_map_l1: LinearRgba,
     #[uniform(0)]
-    pub metallic_map_l2: Color,
+    pub metallic_map_l2: LinearRgba,
     #[texture(19)]
     #[sampler(20)]
     pub emissive_texture: Option<Handle<Image>>,
     #[uniform(0)]
     pub emissive_uv: u32,
     #[uniform(0)]
-    pub emissive_color: Color,
+    pub emissive_color: LinearRgba,
     #[uniform(0)]
-    pub emissive_unmasked_color: Color,
+    pub emissive_unmasked_color: LinearRgba,
     #[uniform(0)]
     pub layer_smoothness: f32,
     #[uniform(0)]
@@ -143,38 +143,38 @@ impl Default for CustomMaterial {
             light_scale: 1.0,
             render_state: MaterialRenderState::default(),
             alpha_mode: AlphaMode::Opaque,
-            base_color: Color::WHITE,
+            base_color: LinearRgba::WHITE,
             base_color_texture_0: None,
             base_color_texture_1: None,
             base_color_texture_2: None,
             base_color_uv_0: 0,
             base_color_uv_1: 0,
             base_color_uv_2: 0,
-            base_color_l0: Color::NONE,
-            base_color_l1: Color::NONE,
-            base_color_l2: Color::NONE,
+            base_color_l0: LinearRgba::NONE,
+            base_color_l1: LinearRgba::NONE,
+            base_color_l2: LinearRgba::NONE,
             normal_map_texture_0: None,
             normal_map_texture_1: None,
             normal_map_texture_2: None,
             normal_map_uv_0: 0,
             normal_map_uv_1: 0,
             normal_map_uv_2: 0,
-            normal_map_l0: Color::NONE,
-            normal_map_l1: Color::NONE,
-            normal_map_l2: Color::NONE,
+            normal_map_l0: LinearRgba::NONE,
+            normal_map_l1: LinearRgba::NONE,
+            normal_map_l2: LinearRgba::NONE,
             metallic_map_texture_0: None,
             metallic_map_texture_1: None,
             metallic_map_texture_2: None,
             metallic_map_uv_0: 0,
             metallic_map_uv_1: 0,
             metallic_map_uv_2: 0,
-            metallic_map_l0: Color::NONE,
-            metallic_map_l1: Color::NONE,
-            metallic_map_l2: Color::NONE,
+            metallic_map_l0: LinearRgba::NONE,
+            metallic_map_l1: LinearRgba::NONE,
+            metallic_map_l2: LinearRgba::NONE,
             emissive_texture: None,
             emissive_uv: 0,
-            emissive_color: Color::NONE,
-            emissive_unmasked_color: Color::NONE,
+            emissive_color: LinearRgba::NONE,
+            emissive_unmasked_color: LinearRgba::NONE,
         }
     }
 }
@@ -200,11 +200,12 @@ impl Material for CustomMaterial {
     fn alpha_mode(&self) -> AlphaMode { self.alpha_mode }
 
     fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
+        _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        layout: &MeshVertexBufferLayout,
+        layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        let layout = &layout.0;
         let mut shader_defs = Vec::<ShaderDefVal>::new();
         let mut vertex_attributes = Vec::new();
         let profile = key.bind_group_data.surface_profile;
@@ -219,7 +220,7 @@ impl Material for CustomMaterial {
                 Mesh::ATTRIBUTE_UV_0,
             ]
             .iter()
-            .all(|a| layout.contains(a.clone()))
+            .all(|a| layout.contains(*a))
             && (profile != MprSurfaceProfile::LayeredVine
                 || (layout.contains(ATTRIBUTE_TANGENT_1) && layout.contains(ATTRIBUTE_UV_1)))
         {
@@ -236,7 +237,7 @@ impl Material for CustomMaterial {
             }
         }
         let mut add_attribute = |attr: MeshVertexAttribute, location: u32, define: &str| {
-            if layout.contains(attr.clone()) {
+            if layout.contains(attr) {
                 shader_defs.push(ShaderDefVal::from(define));
                 vertex_attributes.push(attr.at_shader_location(location));
             }
@@ -275,8 +276,8 @@ impl Material for CustomMaterial {
             target.write_mask = state.color_writes;
         }
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
-            depth.depth_compare = state.depth_compare;
-            depth.depth_write_enabled = state.depth_write;
+            depth.depth_compare = Some(state.depth_compare);
+            depth.depth_write_enabled = Some(state.depth_write);
         }
         descriptor.multisample.alpha_to_coverage_enabled =
             state.alpha_to_coverage && descriptor.multisample.count > 1;

@@ -7,6 +7,14 @@ handles, transform sets and a mesh-to-set map. The map follows **render-mesh
 order**, not material-cache order. Evaluation produces up to three 2×4 UV
 matrices for the material provider.
 
+In the animated Varia/Phazon shader variants, each matrix first selects a packed
+mesh UV pair: selector bit0 chooses XY or ZW, and the remaining bits choose the
+four-component input. The vertex shader transforms three independently selected
+pairs and exports three UV vectors. Texture reads can then select among those
+transformed vectors in the fragment shader. This second selection is distinct
+from choosing the original mesh UVs; collapsing both into one texture-coordinate
+index loses the animation's routing.
+
 The serialized context mixes element sizes and big-endian values inside an
 otherwise little-endian format. A backwards type map and length suffix describe
 the elements to reverse; blindly swapping every word corrupts it. EvalIds select
@@ -14,13 +22,49 @@ either a value or time operation and address context words. The fourth index in
 each transform set remains unexplained.
 
 CEvalSystem quantization is independent of the ColorModifier clock below.
-UV updates do not require shader translation unless specialization inputs change. The viewer's supported ANUV path updates these uniforms
-during playback; finding a later ANUV source behind an unknown, unframed HEAD
-source still requires that source's reader.
+UV updates do not require shader translation unless specialization inputs change.
+The viewer's supported ANUV path updates these uniforms during playback. The
+shared HEAD reader traverses ANUV and WIND in either order; an unknown, unframed
+source stops traversal.
 
 Original readers include `0x7100231c10` and `0x7100234170`; evaluators begin at
-`0x7100233bb4`. See [ANUV](../lib/src/format/model_animated_uv.rs) and the
+`0x7100233bb4`. See [ANUV](../lib/src/format/model_data/animated_uv.rs) and the
 [CEvalSystem template](https://github.com/PrimeDecomp/PrimeRemasterStructs/blob/main/CEvalSystem.bt).
+
+## Wind
+
+HEAD's `WIND` source associates authored wind sets with render meshes; `0xff`
+leaves a mesh without a wind provider. A shared manager deduplicates identical
+sets and updates their material constants from global direction, magnitude and
+two spatial impulses. Wind therefore combines model data with scene state; it
+is not a self-contained animation clip or a material texture effect.
+
+The manager initializes each registered set immediately, even with a zero time
+step. Phase normally accumulates from frame time, but an external global clock
+replaces that accumulation. A wind context scene node installs both the external
+environment and a pointer to its modular simulation time. Without an external
+environment, the native fallback is direction `(0, 0, -1)`, magnitude `0.3` and
+two inactive impulses. This fallback is distinct from reconstructing a ROOM's
+WindWaker animation.
+
+The same simulation offers bounds padding to the owning renderer. World models
+apply it to local octree and mesh boxes after transforming the frustum into model
+space. MCON's owner ignores that callback: it culls against the
+transformed authored model bounds. Ordinary `CModelRenderable::Simulate` also
+does not retain its temporary owner's padding. Padding is therefore an owner
+policy, not a universal step to apply to every WIND material.
+
+The relevant consumers are world-model visibility (`0x7100343f8c`,
+`0x7100344594`) and MCON's no-op padding callback (`0x71001baab8`, vtable slot
+`0x7102071a00`). The CPU simulation matches original ARM64 execution; the grass
+shader pair also agrees with an independent recompiler under supplied preview
+inputs. Neither comparison reconstructs a ROOM's live wind state.
+
+The model reader is `0x7100212bc0`, mesh association `0x7100214160`, simulation
+`0x7100212fcc`, and shader binding `0x7100167b24`. Serialized layout is recorded
+in the [model template](https://github.com/PrimeDecomp/PrimeRemasterStructs/blob/main/CGraphicsModel.bt).
+See the [wind provider](../lib/src/format/model_data/wind.rs) for explicit scene
+inputs and incremental/absolute-time evaluation.
 
 ## Skinning
 

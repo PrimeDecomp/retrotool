@@ -1,5 +1,14 @@
-use bevy::{prelude::*, render::primitives::Aabb};
+use bevy::{
+    camera::{primitives::Aabb, visibility::RenderLayers, ClearColorConfig, Viewport},
+    core_pipeline::tonemapping::Tonemapping,
+    prelude::*,
+};
 use egui::PointerButton;
+
+use super::grid::GridSettings;
+
+#[derive(Component)]
+pub struct SceneCamera;
 
 #[derive(Default)]
 pub struct ModelCamera {
@@ -8,6 +17,8 @@ pub struct ModelCamera {
     pub radius: f32,
     pub origin: Vec3,
     pub projection: Projection,
+    entity: Option<Entity>,
+    input_frame: Option<u64>,
 }
 
 impl ModelCamera {
@@ -24,12 +35,78 @@ impl ModelCamera {
         self.radius = radius;
     }
 
+    /// Keep one camera per tab. UI passes only replace its requested state;
+    /// the next update disables it unless the tab is visible again.
+    pub fn show(
+        &mut self,
+        commands: &mut Commands,
+        viewport: Viewport,
+        layer: usize,
+        environment: Option<EnvironmentMapLight>,
+    ) {
+        if viewport.physical_size.min_element() == 0 {
+            return;
+        }
+        let id = *self.entity.get_or_insert_with(|| commands.spawn_empty().id());
+        let mut entity = commands.entity(id);
+        entity.insert((
+            SceneCamera,
+            Camera3d::default(),
+            Camera {
+                viewport: Some(viewport),
+                order: layer as isize,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            self.transform,
+            self.projection.clone(),
+            Msaa::Sample4,
+            Tonemapping::TonyMcMapface,
+            // The custom preview shader uses normalized light values, as the
+            // old viewer did. Bevy's physical-light default (80) overexposes it.
+            AmbientLight { brightness: 0.05, ..default() },
+            GridSettings,
+            RenderLayers::layer(layer),
+        ));
+        if let Some(environment) = environment {
+            entity.insert(environment);
+        } else {
+            entity.remove::<EnvironmentMapLight>();
+        }
+    }
+
+    pub fn close(&mut self, commands: &mut Commands) {
+        if let Some(entity) = self.entity.take() {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    pub fn pointer_ray(&self, rect: &egui::Rect, position: egui::Pos2) -> Option<Ray3d> {
+        if !rect.contains(position) || rect.size().min_elem() <= 0.0 {
+            return None;
+        }
+        let local = (position - rect.min) / rect.size();
+        let ndc = Vec3::new(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 1.0);
+        let view_position = self.projection.get_clip_from_view().inverse().project_point3(ndc);
+        let direction = self.transform.rotation * view_position;
+        Some(Ray3d::new(self.transform.translation, Dir3::new(direction).ok()?))
+    }
+
     pub fn update(
         &mut self,
         rect: &egui::Rect,
         response: &egui::Response,
         scroll_delta: egui::Vec2,
     ) {
+        if rect.width() <= 0.0 || rect.height() <= 0.0 {
+            return;
+        }
+        self.projection.update(rect.width(), rect.height());
+        let frame = response.ctx.cumulative_frame_nr();
+        if self.input_frame == Some(frame) {
+            return;
+        }
+        self.input_frame = Some(frame);
         let mut any = false;
         let mut rotation_move = Vec2::ZERO;
         let mut pan = Vec2::ZERO;
@@ -41,7 +118,7 @@ impl ModelCamera {
             }
         };
         if response.drag_started_by(PointerButton::Primary)
-            || response.drag_released_by(PointerButton::Primary)
+            || response.drag_stopped_by(PointerButton::Primary)
         {
             // only check for upside down when orbiting started or ended this frame
             // if the camera is "upside" down, panning horizontally would be inverted, so invert the input to make it correct

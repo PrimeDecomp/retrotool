@@ -2,40 +2,65 @@
 //! Static material providers are shared with retrolib; scene providers and
 //! unsupported shaders return a diagnostic before replacing the preview material.
 
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
+
+mod diagnostics;
+mod pipelines;
+mod program;
+
+#[cfg(test)]
+pub(super) mod tests;
 
 use anyhow::{ensure, Context, Result};
 use bevy::{
-    core_pipeline::core_3d::{Opaque3d, Transparent3d},
+    camera::{
+        primitives::{Aabb, Frustum},
+        visibility::NoFrustumCulling,
+    },
+    core_pipeline::core_3d::{
+        Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey, Transparent3d, TransparentSortingInfo3d,
+    },
     ecs::{
         query::QueryItem,
         system::{lifetimeless::*, SystemParamItem},
     },
     prelude::*,
     render::{
+        batching::NoAutomaticBatching,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         render_asset::RenderAssets,
         render_phase::{
-            AddRenderCommand, DrawFunctions, PhaseItem, RenderCommand, RenderCommandResult,
-            RenderPhase, TrackedRenderPass,
+            AddRenderCommand, BinnedRenderPhaseType, DrawFunctions, InputUniformIndex, PhaseItem,
+            PhaseItemExtraIndex, RenderCommand, RenderCommandResult, TrackedRenderPass,
+            ViewBinnedRenderPhases, ViewSortedRenderPhases,
         },
         render_resource::{
-            BindGroup, BindGroupLayout, Buffer, CachedRenderPipelineId, RenderPipeline, Texture,
-            TextureView,
+            BindGroup, BindGroupLayout, Buffer, CachedRenderPipelineId, Texture, TextureView,
         },
         renderer::{RenderDevice, RenderQueue},
-        view::{ExtractedView, ViewTarget, VisibleEntities},
-        RenderApp, RenderSet,
+        sync_component::SyncComponent,
+        sync_world::MainEntity,
+        texture::GpuImage,
+        view::{ExtractedView, RenderVisibleEntities, ViewTarget},
+        Render, RenderApp, RenderSystems,
     },
-    utils::HashMap,
 };
+use diagnostics::{Diagnostics, FaultCapture};
+use pipelines::{MaterialPipelines, PipelineRequest, ViewKey};
+pub use program::Compiler;
+use program::MaterialProgram;
 use remax::{
     maxwell::texture::TextureDimension,
     wgsl::texture::{TextureBinding, TextureValueType},
 };
 use retrolib::format::{
     material_scene_bindings::{SceneMaterialInputs, SceneTexture},
-    material_shader_draw::{ModelShaderDraw, ModelShaderTextureSource},
+    material_shader_draw::{
+        ModelShaderBindings, ModelShaderFrame, ModelShaderOptions, ModelShaderTextureSource,
+    },
     model_shader_inputs::{model_mesh_indices, model_vertex_inputs},
     shader_nvn_globals::NvnGlobalTransforms,
     shader_nvn_samples::{NvnSampleShading, NvnSampleState},
@@ -50,8 +75,21 @@ use crate::loaders::{
     texture::{sampler_descriptor, TextureAsset},
 };
 
+/// Each generated draw owns bindings outside Bevy's mesh/material batches.
+/// In particular, transparent batch sets must not merge distinct programs just
+/// because their phase items share our custom draw function and cache-ID sentinel.
+/// Frustum culling is performed per view with authored model bounds. Bevy's
+/// undeformed per-mesh culling must not reject these draws first.
 #[derive(Component, Clone)]
-pub struct OriginalShaderMesh(Arc<PreparedMesh>);
+#[require(NoAutomaticBatching, NoFrustumCulling)]
+pub struct OriginalShaderMesh {
+    prepared: Arc<PreparedMesh>,
+    diagnostics: Diagnostics,
+    // CMDL/MCON owners cull the authored whole-model box, not the undeformed
+    // vertices of an individual draw. World-model octree culling is separate.
+    model_bounds: Aabb,
+    pub baked_atlas_lookup: Option<retrolib::format::room::SAtlasLookup>,
+}
 
 /// Per-instance playback time. Kept outside PreparedMesh so uniform animation
 /// preserves shared geometry, texture resources and compiled pipelines.
@@ -63,20 +101,41 @@ pub struct OriginalShaderInfo {
     pub sources: [i32; 4],
     pub permutation: [u64; 2],
     pub animated_uv: bool,
+    pub wind: bool,
+    pub baked_atlas: bool,
+    pub compiler: Compiler,
+    pub diagnostics: Diagnostics,
 }
 
 impl OriginalShaderMesh {
+    /// Share compiled resources while keeping each scene instance's diagnostics separate.
+    pub fn instance(&self) -> Self {
+        Self {
+            prepared: self.prepared.clone(),
+            diagnostics: Diagnostics::new(self.prepared.draw.has_faults()),
+            model_bounds: self.model_bounds,
+            baked_atlas_lookup: self.baked_atlas_lookup,
+        }
+    }
+
     pub fn info(&self) -> OriginalShaderInfo {
         OriginalShaderInfo {
-            sources: self.0.draw.source_indices,
-            permutation: self.0.draw.permutation,
-            animated_uv: self.0.draw.has_animated_uv(),
+            sources: self.prepared.draw.bindings.source_indices,
+            permutation: self.prepared.draw.bindings.permutation,
+            animated_uv: self.prepared.draw.bindings.has_animated_uv(),
+            wind: self.prepared.draw.bindings.has_wind(),
+            baked_atlas: self.prepared.draw.bindings.uses_draw_uniform(
+                retrolib::format::material_scene_bindings::DrawUniform::BakedAtlasLookup,
+            ),
+            compiler: self.prepared.compiler,
+            diagnostics: self.diagnostics.clone(),
         }
     }
 }
 
 struct PreparedMesh {
-    draw: ModelShaderDraw,
+    draw: MaterialProgram,
+    compiler: Compiler,
     vertices: Vec<[u32; 256]>,
     indices: Vec<u32>,
     images: Vec<PreparedImage>,
@@ -88,11 +147,17 @@ enum PreparedImage {
     Cache(SceneTexture),
 }
 
-/// Caller-supplied scene data and GPU images for runtime texture tokens. Cache
-/// white/zero images are constructed from their recovered native descriptors.
-/// A supplied image's complete backing texture must match the declared type.
-/// This adapter constructs full views; mip/layer subresource views are unsupported.
-#[allow(dead_code)] // Conservative entry point also used by standalone research probes.
+/// Compiler choice and actual enabled host capabilities.
+#[derive(Clone, Copy)]
+pub struct ShaderOptions {
+    pub compiler: Compiler,
+    pub features: wgpu::Features,
+    pub backend: wgpu::Backend,
+}
+
+/// Resolve material inputs, compile and validate resources before replacing the
+/// preview material. Runtime tokens name caller-supplied complete texture views.
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_mesh_with_scene(
     model: &ModelAsset,
     mesh_index: usize,
@@ -100,32 +165,28 @@ pub fn prepare_mesh_with_scene(
     materials: &Assets<MaterialAsset>,
     textures: &Assets<TextureAsset>,
     scene: &SceneMaterialInputs<'_>,
-    scene_image: impl FnMut(u64) -> Result<Handle<Image>>,
-) -> Result<OriginalShaderMesh> {
-    prepare_mesh_with_scene_and_features(
-        model,
-        mesh_index,
-        mirrored,
-        materials,
-        textures,
-        scene,
-        wgpu::Features::empty(),
-        scene_image,
-    )
-}
-
-/// As above, with the enabled features of the device which will draw the mesh.
-/// Border sampling must be supported before replacing a working preview draw.
-pub fn prepare_mesh_with_scene_and_features(
-    model: &ModelAsset,
-    mesh_index: usize,
-    mirrored: bool,
-    materials: &Assets<MaterialAsset>,
-    textures: &Assets<TextureAsset>,
-    scene: &SceneMaterialInputs<'_>,
-    features: wgpu::Features,
+    options: ShaderOptions,
     mut scene_image: impl FnMut(u64) -> Result<Handle<Image>>,
 ) -> Result<OriginalShaderMesh> {
+    let model_bounds = super::convert_aabb(&model.inner.head.bounds);
+    ensure!(
+        model_bounds.center.is_finite()
+            && model_bounds.half_extents.is_finite()
+            && model_bounds.half_extents.min_element() >= 0.,
+        "Invalid authored model bounds"
+    );
+    if matches!(options.compiler, Compiler::Remax(_)) {
+        ensure!(
+            options.backend == wgpu::Backend::Metal,
+            "Remax helper-aware graphics diagnostics have only been established on Metal"
+        );
+        ensure!(
+            options
+                .features
+                .contains(wgpu::Features::SUBGROUP | wgpu::Features::VERTEX_WRITABLE_STORAGE),
+            "Remax graphics diagnostics require subgroup operations and vertex storage writes"
+        );
+    }
     let mesh = model.inner.mesh.meshes.get(mesh_index).context("Missing mesh")?;
     let material = &model.inner.mtrl.materials[mesh.material_idx as usize];
     let resource = model
@@ -133,26 +194,55 @@ pub fn prepare_mesh_with_scene_and_features(
         .get(&material.material_resource_id)
         .and_then(|h| materials.get(h))
         .context("Material archive unavailable")?;
-    let draw = ModelShaderDraw::prepare_mesh_with_scene(
+    let bindings = ModelShaderBindings::prepare_mesh_with_scene(
         &model.inner,
         mesh_index,
         &resource.inner.payload()?,
-        b'f',
-        NvnSampleShading::ShaderDefault,
+        ModelShaderOptions { technique: b'f', sample_shading: NvnSampleShading::ShaderDefault },
         |id| {
             Ok(model.textures.get(&id).and_then(|h| textures.get(h)).map(|t| t.inner.head.clone()))
         },
         scene,
-        0.0, // Baseline; extracted instance time updates UV uniforms at draw time.
+        0.0, // Baseline; extracted instance time updates material uniforms at draw time.
     )?;
+    let bound = mesh_draw_state(
+        model.inner.mesh.mesh_class(mesh_index).context("Missing mesh class")?,
+        model.inner.mesh.is_two_sided(mesh_index).context("Missing two-sided flag")?,
+        mirrored,
+    )?;
+    let mut merged = bindings.technique_state.clone();
+    merged.merge(&bound)?;
+    merged.merge(&bindings.override_state)?;
+    let mut state = MaterialRenderState::default();
+    let mut warnings = state.apply(&bound);
+    warnings.extend(state.apply(&merged));
+    ensure!(warnings.is_empty(), "Original shader draw state: {}", warnings.join("; "));
+    let color_routing = state.color_routing();
+    if color_routing == remax::maxwell::graphics::ColorOutputRouting::DualSource {
+        ensure!(
+            options.features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+            "Original shader requires the DualSourceBlending GPU feature"
+        );
+    }
+    let sources = bindings.source_indices;
+    let draw = MaterialProgram::compile(bindings, options.compiler, color_routing)
+        .with_context(|| format!("VS source {}, PS source {}", sources[0], sources[1]))?;
+    ensure!(
+        !draw.uses_clip_distances() || options.features.contains(wgpu::Features::CLIP_DISTANCES),
+        "Original shader requires the ClipDistances GPU feature (unavailable on wgpu 29 Metal)"
+    );
     let images = draw
+        .bindings
         .textures
         .iter()
         .map(|t| {
             ensure!(
                 matches!(
                     t.binding.dimension,
-                    TextureDimension::D2 | TextureDimension::D3 | TextureDimension::Cube
+                    TextureDimension::D2
+                        | TextureDimension::D2Array
+                        | TextureDimension::D3
+                        | TextureDimension::Cube
                 ) && matches!(
                     t.binding.value_type,
                     TextureValueType::Float | TextureValueType::Uint | TextureValueType::Sint
@@ -168,7 +258,7 @@ pub fn prepare_mesh_with_scene_and_features(
             );
             if t.sampler.wrap.contains(&4) {
                 ensure!(
-                    features.contains(wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER),
+                    options.features.contains(wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER),
                     "Original shader viewer requires the ClampToBorder GPU feature"
                 );
                 ensure!(
@@ -222,30 +312,34 @@ pub fn prepare_mesh_with_scene_and_features(
     let vertices = model_vertex_inputs(
         &model.inner,
         mesh.vtx_buf_idx as usize,
-        &draw.vertex_layout,
-        &draw.kernel.vertex.input_attributes,
+        &draw.bindings.vertex_layout,
+        draw.attributes(),
     )?;
     let indices = model_mesh_indices(&model.inner, mesh_index)?;
     ensure!(!vertices.is_empty() && !indices.is_empty(), "Empty original shader draw");
-    let bound = mesh_draw_state(
-        model.inner.mesh.mesh_class(mesh_index).context("Missing mesh class")?,
-        model.inner.mesh.is_two_sided(mesh_index).context("Missing two-sided flag")?,
-        mirrored,
-    )?;
-    let mut merged = draw.technique_state.clone();
-    merged.merge(&bound)?;
-    merged.merge(&draw.override_state)?;
-    let mut state = MaterialRenderState::default();
-    let mut warnings = state.apply(&bound);
-    warnings.extend(state.apply(&merged));
-    ensure!(warnings.is_empty(), "Original shader draw state: {}", warnings.join("; "));
     // Validate direct constant availability before replacing a preview material.
     // Indexed reads retain byte validity and fault rather than using unknown data.
-    draw.constants(
-        &preview_transforms(Mat4::IDENTITY, Mat4::IDENTITY, Mat4::IDENTITY),
-        sample_state(1)?.constants,
-    )?;
-    Ok(OriginalShaderMesh(Arc::new(PreparedMesh { draw, vertices, indices, images, state })))
+    let transforms = preview_transforms(Mat4::IDENTITY, Mat4::IDENTITY, Mat4::IDENTITY);
+    draw.constants(&ModelShaderFrame {
+        animation_time: Some(0.0),
+        cull_camera_position: Some([0.0; 3]),
+        // Structural preflight only. Every actual draw supplies its own lookup.
+        baked_atlas_lookup: Some(retrolib::format::room::SAtlasLookup([0., 0., 1., 0.].into())),
+        ..ModelShaderFrame::new(&transforms, sample_state(1)?.constants)
+    })?;
+    Ok(OriginalShaderMesh {
+        diagnostics: Diagnostics::new(draw.has_faults()),
+        model_bounds,
+        baked_atlas_lookup: None,
+        prepared: Arc::new(PreparedMesh {
+            draw,
+            compiler: options.compiler,
+            vertices,
+            indices,
+            images,
+            state,
+        }),
+    })
 }
 
 /// Explicit viewer matrices in the recovered uc_globalTransforms upload layout.
@@ -290,27 +384,41 @@ fn sample_state(count: u32) -> Result<retrolib::format::shader_nvn_samples::NvnS
 #[derive(Component)]
 pub struct ExtractedOriginalMesh {
     mesh: Arc<PreparedMesh>,
+    asset_id: bevy::asset::UntypedAssetId,
     transform: Mat4,
-    uv_seconds: f64,
+    animation_seconds: f64,
+    diagnostics: Diagnostics,
+    world_bounds: Aabb,
+    baked_atlas_lookup: Option<retrolib::format::room::SAtlasLookup>,
+}
+
+impl SyncComponent for OriginalShaderMesh {
+    type Target = ExtractedOriginalMesh;
 }
 
 impl ExtractComponent for OriginalShaderMesh {
-    type Filter = ();
     type Out = ExtractedOriginalMesh;
-    type Query = (
+    type QueryData = (
         &'static Self,
         &'static GlobalTransform,
-        &'static ComputedVisibility,
+        &'static Mesh3d,
         Option<&'static OriginalShaderTime>,
     );
+    type QueryFilter = ();
 
     fn extract_component(
-        (mesh, transform, visibility, time): QueryItem<Self::Query>,
+        (mesh, transform, geometry, time): QueryItem<Self::QueryData>,
     ) -> Option<Self::Out> {
-        visibility.is_visible().then(|| ExtractedOriginalMesh {
-            mesh: mesh.0.clone(),
-            transform: transform.compute_matrix(),
-            uv_seconds: time.map_or(0.0, |t| t.0),
+        // Queue visibility is per view. Keep hidden instances extracted so LOD
+        // changes and tab switches preserve their compiled resources.
+        Some(ExtractedOriginalMesh {
+            mesh: mesh.prepared.clone(),
+            diagnostics: mesh.diagnostics.clone(),
+            asset_id: geometry.0.id().untyped(),
+            transform: transform.to_matrix(),
+            world_bounds: super::transform_aabb(&mesh.model_bounds, &transform.affine()),
+            animation_seconds: time.map_or(0.0, |t| t.0),
+            baked_atlas_lookup: mesh.baked_atlas_lookup,
         })
     }
 }
@@ -318,12 +426,16 @@ impl ExtractComponent for OriginalShaderMesh {
 pub struct OriginalShaderPlugin;
 impl Plugin for OriginalShaderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugin(ExtractComponentPlugin::<OriginalShaderMesh>::default());
+        app.add_plugins(ExtractComponentPlugin::<OriginalShaderMesh>::default());
         app.sub_app_mut(RenderApp)
             .init_resource::<GpuMeshes>()
+            .init_resource::<MaterialPipelines>()
+            .init_resource::<diagnostics::FaultReadbacks>()
+            .add_systems(Render, diagnostics::read_draw_faults.in_set(RenderSystems::Cleanup))
             .add_render_command::<Transparent3d, DrawOriginal>()
             .add_render_command::<Opaque3d, DrawOriginal>()
-            .add_system(queue_original.in_set(RenderSet::Queue));
+            .add_systems(Render, clear_original_bins.in_set(RenderSystems::PrepareAssets))
+            .add_systems(Render, queue_original.in_set(RenderSystems::QueueMeshes));
     }
 }
 
@@ -333,15 +445,26 @@ struct GpuMesh {
     indices: Buffer,
     layouts: [BindGroupLayout; 4],
     textures: [BindGroup; 2],
-    pipelines: HashMap<(u32, wgpu::TextureFormat), RenderPipeline>,
+    layout_entries: [Vec<wgpu::BindGroupLayoutEntry>; 4],
+}
+
+struct GpuInstance {
+    mesh: Arc<GpuMesh>,
+    pipelines: HashMap<ViewKey, Arc<PipelineRequest>>,
+    faults: Option<Arc<FaultCapture>>,
 }
 
 #[derive(Resource, Default)]
-struct GpuMeshes(HashMap<Entity, GpuMesh>);
+struct GpuMeshes {
+    instances: HashMap<Entity, GpuInstance>,
+    prepared: HashMap<usize, Weak<GpuMesh>>,
+}
 
 struct ViewDraw {
-    key: (u32, wgpu::TextureFormat),
+    pipeline: Arc<PipelineRequest>,
+    main_entity: MainEntity,
     groups: [BindGroup; 2],
+    faults: Option<Arc<FaultCapture>>,
 }
 #[derive(Component, Default)]
 struct OriginalViewDraws(HashMap<Entity, ViewDraw>);
@@ -379,6 +502,7 @@ fn texture_sample_type(value: TextureValueType) -> wgpu::TextureSampleType {
 fn texture_view_dimension(dimension: TextureDimension) -> Result<wgpu::TextureViewDimension> {
     Ok(match dimension {
         TextureDimension::D2 => wgpu::TextureViewDimension::D2,
+        TextureDimension::D2Array => wgpu::TextureViewDimension::D2Array,
         TextureDimension::D3 => wgpu::TextureViewDimension::D3,
         TextureDimension::Cube => wgpu::TextureViewDimension::Cube,
         _ => anyhow::bail!("Original shader viewer has no {dimension:?} texture adapter"),
@@ -404,7 +528,7 @@ pub(crate) fn original_texture_view(
         );
     }
     ensure!(
-        texture.format().describe().sample_type == texture_sample_type(binding.value_type),
+        texture.format().sample_type(None, None) == Some(texture_sample_type(binding.value_type)),
         "Original shader texture sample type disagrees with its declaration"
     );
     ensure!(
@@ -412,6 +536,7 @@ pub(crate) fn original_texture_view(
             TextureDimension::D2 =>
                 texture.dimension() == wgpu::TextureDimension::D2
                     && texture.depth_or_array_layers() == 1,
+            TextureDimension::D2Array => texture.dimension() == wgpu::TextureDimension::D2,
             TextureDimension::Cube =>
                 texture.dimension() == wgpu::TextureDimension::D2
                     && texture.depth_or_array_layers() == 6
@@ -436,303 +561,362 @@ impl GpuMesh {
         source: Arc<PreparedMesh>,
         device: &RenderDevice,
         queue: &RenderQueue,
-        images: &RenderAssets<Image>,
-    ) -> Option<Self> {
-        let textures = source
-            .images
-            .iter()
-            .zip(&source.draw.textures)
-            .map(|(image, declaration)| match image {
-                PreparedImage::Image(handle) => {
-                    let image = images.get(handle)?;
-                    original_texture_view(&image.texture, &declaration.binding).ok()
-                }
-                PreparedImage::Cache(kind) => {
-                    let data = kind.cache_data()?;
-                    let format = match data.format {
-                        ETextureFormat::Rgba32Uint => wgpu::TextureFormat::Rgba32Uint,
-                        ETextureFormat::Rgba8Unorm => wgpu::TextureFormat::Rgba8Unorm,
-                        _ => return None,
-                    };
-                    let texture = device.create_texture_with_data(
-                        queue,
-                        &wgpu::TextureDescriptor {
-                            label: Some("MPR native scene cache image"),
-                            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                                | wgpu::TextureUsages::COPY_DST,
-                            view_formats: &[],
-                        },
-                        data.pixels,
-                    );
-                    original_texture_view(&texture, &declaration.binding).ok()
-                }
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let stages = [&source.draw.kernel.vertex, &source.draw.kernel.fragment];
-        let visibility = [wgpu::ShaderStages::VERTEX, wgpu::ShaderStages::FRAGMENT];
-        let mut entries = [
-            vec![
-                storage_layout(0, visibility[0]),
-                storage_layout(1, visibility[0]),
-                storage_layout(2, visibility[1]),
-            ],
-            vec![],
-            vec![],
-            vec![],
-        ];
-        for (stage, kernel) in stages.iter().enumerate() {
-            if let Some(binding) = kernel.constant_memory_binding {
-                entries[binding.group as usize]
-                    .push(storage_layout(binding.binding, visibility[stage]));
+        images: &RenderAssets<GpuImage>,
+    ) -> Result<Option<Self>> {
+        pipelines::checked(device, "Original material resources", || {
+            let mut textures = Vec::with_capacity(source.images.len());
+            for (image, declaration) in source.images.iter().zip(&source.draw.bindings.textures) {
+                let view = match image {
+                    PreparedImage::Image(handle) => {
+                        let Some(image) = images.get(handle) else { return Ok(None) };
+                        original_texture_view(&image.texture, &declaration.binding)?
+                    }
+                    PreparedImage::Cache(kind) => {
+                        let data = kind.cache_data().context("Unavailable native scene cache")?;
+                        let format = match data.format {
+                            ETextureFormat::Rgba32Uint => wgpu::TextureFormat::Rgba32Uint,
+                            ETextureFormat::Rgba8Unorm => wgpu::TextureFormat::Rgba8Unorm,
+                            other => anyhow::bail!("Unsupported scene cache format: {other:?}"),
+                        };
+                        let texture = device.create_texture_with_data(
+                            queue,
+                            &wgpu::TextureDescriptor {
+                                label: Some("MPR native scene cache image"),
+                                size: wgpu::Extent3d {
+                                    width: 1,
+                                    height: 1,
+                                    depth_or_array_layers: 1,
+                                },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                    | wgpu::TextureUsages::COPY_DST,
+                                view_formats: &[],
+                            },
+                            wgpu::util::TextureDataOrder::LayerMajor,
+                            data.pixels,
+                        );
+                        original_texture_view(&texture, &declaration.binding)?
+                    }
+                };
+                textures.push(view);
             }
-            for t in &kernel.textures {
-                entries[stage + 2].push(wgpu::BindGroupLayoutEntry {
-                    binding: t.texture_binding,
-                    visibility: visibility[stage],
-                    count: None,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: texture_sample_type(t.binding.value_type),
-                        view_dimension: texture_view_dimension(t.binding.dimension).ok()?,
-                        multisampled: false,
-                    },
-                });
-                if let Some(binding) = t.sampler_binding {
+            let stages = [source.draw.textures(0), source.draw.textures(1)];
+            let visibility = [wgpu::ShaderStages::VERTEX, wgpu::ShaderStages::FRAGMENT];
+            let mut entries = [
+                vec![
+                    storage_layout(0, visibility[0]),
+                    storage_layout(1, visibility[0]),
+                    storage_layout(2, visibility[1]),
+                ],
+                vec![],
+                vec![],
+                vec![],
+            ];
+            if source.draw.has_faults() {
+                let mut faults = storage_layout(3, wgpu::ShaderStages::VERTEX_FRAGMENT);
+                faults.ty = wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                };
+                entries[0].push(faults);
+            }
+            for (stage, textures) in stages.iter().enumerate() {
+                if let Some(binding) = source.draw.memory_bindings()[stage] {
+                    entries[binding.group as usize]
+                        .push(storage_layout(binding.binding, visibility[stage]));
+                }
+                for t in textures {
                     entries[stage + 2].push(wgpu::BindGroupLayoutEntry {
-                        binding,
+                        binding: t.texture,
                         visibility: visibility[stage],
                         count: None,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: texture_sample_type(t.view.value_type),
+                            view_dimension: texture_view_dimension(t.view.dimension)?,
+                            multisampled: false,
+                        },
                     });
+                    if let Some(binding) = t.sampler {
+                        entries[stage + 2].push(wgpu::BindGroupLayoutEntry {
+                            binding,
+                            visibility: visibility[stage],
+                            count: None,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        });
+                    }
                 }
             }
-        }
-        let layouts = entries.map(|entries| {
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("MPR original shader resources"),
-                entries: &entries,
-            })
-        });
-        let samplers = source
-            .draw
-            .textures
-            .iter()
-            .map(|t| device.create_sampler(&sampler_descriptor(&t.sampler, device.features())))
-            .collect::<Vec<_>>();
-        let groups = std::array::from_fn(|stage| {
-            let mut entries = Vec::new();
-            for t in &stages[stage].textures {
-                let index = source
-                    .draw
-                    .textures
-                    .iter()
-                    .position(|s| {
-                        s.stage == stage && s.binding.texture_index == t.binding.texture_index
-                    })
-                    .unwrap();
-                entries.push(wgpu::BindGroupEntry {
-                    binding: t.texture_binding,
-                    resource: wgpu::BindingResource::TextureView(&textures[index]),
-                });
-                if let Some(binding) = t.sampler_binding {
+            let layouts = entries.each_ref().map(|entries| {
+                device.create_bind_group_layout("MPR original shader resources", entries)
+            });
+            let samplers = source
+                .draw
+                .bindings
+                .textures
+                .iter()
+                .map(|t| device.create_sampler(&sampler_descriptor(&t.sampler, device.features())))
+                .collect::<Vec<_>>();
+            let groups = std::array::from_fn(|stage| {
+                let mut entries = Vec::new();
+                for t in &stages[stage] {
+                    let index = source
+                        .draw
+                        .bindings
+                        .textures
+                        .iter()
+                        .position(|s| {
+                            s.stage == stage && s.binding.texture_index == t.view.texture_index
+                        })
+                        .unwrap();
                     entries.push(wgpu::BindGroupEntry {
-                        binding,
-                        resource: wgpu::BindingResource::Sampler(&samplers[index]),
+                        binding: t.texture,
+                        resource: wgpu::BindingResource::TextureView(&textures[index]),
                     });
+                    if let Some(binding) = t.sampler {
+                        entries.push(wgpu::BindGroupEntry {
+                            binding,
+                            resource: wgpu::BindingResource::Sampler(&samplers[index]),
+                        });
+                    }
                 }
-            }
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MPR texture bindings"),
-                layout: &layouts[stage + 2],
-                entries: &entries,
-            })
-        });
-        let vertices =
-            buffer(device, bytemuck::cast_slice(&source.vertices), wgpu::BufferUsages::STORAGE);
-        let indices = buffer(device, &source.indices, wgpu::BufferUsages::INDEX);
-        Some(Self { source, vertices, indices, layouts, textures: groups, pipelines: default() })
-    }
-
-    fn pipeline(
-        &mut self,
-        device: &RenderDevice,
-        key: (u32, wgpu::TextureFormat),
-        format: wgpu::TextureFormat,
-    ) {
-        if self.pipelines.contains_key(&key) {
-            return;
-        }
-        let module = device.wgpu_device().create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("MPR original vertex/pixel shaders"),
-            source: wgpu::ShaderSource::Wgsl(self.source.draw.kernel.wgsl.clone().into()),
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &self.layouts.iter().map(|l| &**l).collect::<Vec<_>>(),
-            push_constant_ranges: &[],
-        });
-        let state = self.source.state;
-        self.pipelines.insert(
-            key,
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("MPR original material"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: "mpr_vertex_main",
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: "mpr_fragment_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: state.blend,
-                        write_mask: state.color_writes,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: state.cull_mode,
-                    front_face: state.front_face,
-                    ..default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: state.depth_write,
-                    depth_compare: state.depth_compare,
-                    stencil: default(),
-                    bias: default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: key.0,
-                    alpha_to_coverage_enabled: state.alpha_to_coverage,
-                    ..default()
-                },
-                multiview: None,
-            }),
-        );
-    }
-
-    fn view_draw(
-        &self,
-        device: &RenderDevice,
-        transform: Mat4,
-        view: &ExtractedView,
-        key: (u32, wgpu::TextureFormat),
-        uv_seconds: f64,
-    ) -> Result<ViewDraw> {
-        let constants = self.source.draw.constants_at_time(
-            &preview_transforms(
-                transform,
-                view.transform.compute_matrix().inverse(),
-                view.projection,
-            ),
-            sample_state(key.0)?.constants,
-            uv_seconds,
-        )?;
-        let compact = [
-            buffer(device, &constants.vertex_compact, wgpu::BufferUsages::STORAGE),
-            buffer(device, &constants.fragment_compact, wgpu::BufferUsages::STORAGE),
-        ];
-        let input = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.layouts[0],
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.vertices.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: compact[0].as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: compact[1].as_entire_binding() },
-            ],
-        });
-        let memories = [
-            buffer(device, constants.vertex_memory.words(), wgpu::BufferUsages::STORAGE),
-            buffer(device, constants.fragment_memory.words(), wgpu::BufferUsages::STORAGE),
-        ];
-        let entries = [&self.source.draw.kernel.vertex, &self.source.draw.kernel.fragment]
-            .iter()
-            .enumerate()
-            .filter_map(|(stage, k)| {
-                k.constant_memory_binding.map(|b| wgpu::BindGroupEntry {
-                    binding: b.binding,
-                    resource: memories[stage].as_entire_binding(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let memory = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.layouts[1],
-            entries: &entries,
-        });
-        Ok(ViewDraw { key, groups: [input, memory] })
+                device.create_bind_group("MPR texture bindings", &layouts[stage + 2], &entries)
+            });
+            let vertices = buffer(
+                device,
+                &source.draw.vertex_words(&source.vertices),
+                wgpu::BufferUsages::STORAGE,
+            );
+            let indices = buffer(device, &source.indices, wgpu::BufferUsages::INDEX);
+            Ok(Some(Self {
+                source,
+                vertices,
+                indices,
+                layouts,
+                textures: groups,
+                layout_entries: entries,
+            }))
+        })
+        .map_err(anyhow::Error::msg)?
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+impl GpuInstance {
+    fn view_draw(
+        &self,
+        device: &RenderDevice,
+        extracted: &ExtractedOriginalMesh,
+        main_entity: MainEntity,
+        view: &ExtractedView,
+        key: ViewKey,
+    ) -> Result<ViewDraw> {
+        let transforms = preview_transforms(
+            extracted.transform,
+            view.world_from_view.to_matrix().inverse(),
+            view.clip_from_view,
+        );
+        let constants = self.mesh.source.draw.constants(&ModelShaderFrame {
+            transforms: &transforms,
+            samples: sample_state(key.0)?.constants,
+            animation_time: Some(extracted.animation_seconds),
+            // The standalone viewer uses the rendering camera for culling.
+            cull_camera_position: Some(view.world_from_view.translation().to_array()),
+            baked_atlas_lookup: extracted.baked_atlas_lookup,
+        })?;
+        let compact =
+            constants.inputs.map(|words| buffer(device, &words, wgpu::BufferUsages::STORAGE));
+        let faults = self.faults.clone();
+        let mut inputs = vec![
+            wgpu::BindGroupEntry { binding: 0, resource: self.mesh.vertices.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: compact[0].as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: compact[1].as_entire_binding() },
+        ];
+        if let Some(faults) = &faults {
+            inputs.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: faults.buffer.as_entire_binding(),
+            });
+        }
+        let input = device.create_bind_group("MPR vertex inputs", &self.mesh.layouts[0], &inputs);
+        let memories: Vec<_> = constants
+            .memories
+            .into_iter()
+            .map(|(binding, words)| (binding, buffer(device, &words, wgpu::BufferUsages::STORAGE)))
+            .collect();
+        let entries: Vec<_> = memories
+            .iter()
+            .map(|(binding, data)| wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: data.as_entire_binding(),
+            })
+            .collect();
+        let memory =
+            device.create_bind_group("MPR constant memory", &self.mesh.layouts[1], &entries);
+        Ok(ViewDraw {
+            pipeline: self.pipelines[&key].clone(),
+            main_entity,
+            groups: [input, memory],
+            faults,
+        })
+    }
+}
+
+// Binned phases retain entries across frames. Remove only our previous entries
+// before Bevy queues preview materials, including when an original draw falls back.
+fn clear_original_bins(
+    views: Query<(&ExtractedView, &OriginalViewDraws)>,
+    mut phases: ResMut<ViewBinnedRenderPhases<Opaque3d>>,
+) {
+    for (view, draws) in &views {
+        if let Some(phase) = phases.get_mut(&view.retained_view_entity) {
+            for draw in draws.0.values() {
+                phase.remove(draw.main_entity);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn queue_original(
     mut commands: Commands,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
-    images: Res<RenderAssets<Image>>,
-    msaa: Res<Msaa>,
+    images: Res<RenderAssets<GpuImage>>,
     functions: Res<DrawFunctions<Transparent3d>>,
     opaque_functions: Res<DrawFunctions<Opaque3d>>,
     mut gpu: ResMut<GpuMeshes>,
-    meshes: Query<(Entity, &ExtractedOriginalMesh)>,
-    mut views: Query<(
-        Entity,
-        &ExtractedView,
-        &VisibleEntities,
-        &ViewTarget,
-        &mut RenderPhase<Transparent3d>,
-        &mut RenderPhase<Opaque3d>,
-    )>,
+    mut pipelines: ResMut<MaterialPipelines>,
+    meshes: Query<(Entity, &MainEntity, &ExtractedOriginalMesh)>,
+    views: Query<(Entity, &ExtractedView, &RenderVisibleEntities, &Frustum, &ViewTarget, &Msaa)>,
+    mut transparent_phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
+    mut opaque_phases: ResMut<ViewBinnedRenderPhases<Opaque3d>>,
 ) {
-    gpu.0.retain(|entity, _| meshes.get(*entity).is_ok());
-    for (view_entity, view, visible, target, mut phase, mut opaque_phase) in &mut views {
+    gpu.instances.retain(|entity, _| meshes.get(*entity).is_ok());
+    gpu.prepared.retain(|_, mesh| mesh.strong_count() != 0);
+    pipelines.prune();
+    let entities: HashMap<_, _> = meshes.iter().map(|(entity, main, _)| (*main, entity)).collect();
+    for (view_entity, view, visible, frustum, target, msaa) in &views {
+        let (Some(phase), Some(opaque_phase), Some(visible)) = (
+            transparent_phases.get_mut(&view.retained_view_entity),
+            opaque_phases.get_mut(&view.retained_view_entity),
+            visible.get::<Mesh3d>(),
+        ) else {
+            continue;
+        };
         let mut draws = OriginalViewDraws::default();
         let key = (msaa.samples(), target.main_texture_format());
-        for &entity in &visible.entities {
-            let Ok((_, extracted)) = meshes.get(entity) else {
+        for &(_, main_entity) in &visible.entities_cpu_culling {
+            let Some(&entity) = entities.get(&main_entity) else { continue };
+            let Ok((_, _, extracted)) = meshes.get(entity) else {
                 continue;
             };
-            if gpu.0.get(&entity).is_some_and(|g| !Arc::ptr_eq(&g.source, &extracted.mesh)) {
-                gpu.0.remove(&entity);
+            // Bevy handles inherited visibility and render layers; its mesh
+            // frustum test is disabled for these draws. Native model owners
+            // test a world-aligned box, including for rotated instances.
+            // Retain the viewer's existing side/near-plane clipping policy.
+            if !frustum.intersects_obb(
+                &extracted.world_bounds,
+                &bevy::math::Affine3A::IDENTITY,
+                true,
+                false,
+            ) {
+                continue;
             }
-            if !gpu.0.contains_key(&entity) {
-                let Some(mesh) = GpuMesh::new(extracted.mesh.clone(), &device, &queue, &images)
-                else {
-                    continue;
+            if gpu
+                .instances
+                .get(&entity)
+                .is_some_and(|instance| !Arc::ptr_eq(&instance.mesh.source, &extracted.mesh))
+            {
+                gpu.instances.remove(&entity);
+            }
+            if !gpu.instances.contains_key(&entity) {
+                let identity = Arc::as_ptr(&extracted.mesh) as usize;
+                let mesh = match gpu.prepared.get(&identity).and_then(Weak::upgrade) {
+                    Some(mesh) => mesh,
+                    None => {
+                        let mesh =
+                            match GpuMesh::new(extracted.mesh.clone(), &device, &queue, &images) {
+                                Ok(Some(mesh)) => mesh,
+                                Ok(None) => continue,
+                                Err(error) => {
+                                    extracted
+                                        .diagnostics
+                                        .fail(format!("Original shader resources: {error:#}"));
+                                    continue;
+                                }
+                            };
+                        let mesh = Arc::new(mesh);
+                        gpu.prepared.insert(identity, Arc::downgrade(&mesh));
+                        mesh
+                    }
                 };
-                gpu.0.insert(entity, mesh);
+                let faults = mesh
+                    .source
+                    .draw
+                    .has_faults()
+                    .then(|| FaultCapture::new(&device, extracted.diagnostics.clone()));
+                gpu.instances.insert(entity, GpuInstance { mesh, pipelines: default(), faults });
             }
-            let mesh = gpu.0.get_mut(&entity).unwrap();
-            mesh.pipeline(&device, key, target.main_texture_format());
-            match mesh.view_draw(&device, extracted.transform, view, key, extracted.uv_seconds) {
+            let instance = gpu.instances.get_mut(&entity).unwrap();
+            let request = instance.pipelines.entry(key).or_insert_with(|| {
+                let mesh = &instance.mesh;
+                pipelines.request(
+                    &device,
+                    &mesh.source.draw,
+                    &mesh.layout_entries,
+                    &mesh.layouts,
+                    mesh.source.state,
+                    key,
+                )
+            });
+            match request.pipeline() {
+                Ok(Some(_)) => extracted.diagnostics.pipeline_ready(),
+                Ok(None) => continue,
+                Err(error) => {
+                    extracted.diagnostics.fail(format!("Original shader compilation: {error}"));
+                    continue;
+                }
+            }
+            match instance.view_draw(&device, extracted, main_entity, view, key) {
                 Ok(draw) => {
                     draws.0.insert(entity, draw);
                 }
                 Err(e) => {
+                    extracted.diagnostics.fail(format!("Original shader constants: {e:#}"));
                     log::error!("Original shader view constants: {e:#}");
                     continue;
                 }
             }
-            let distance = view.rangefinder3d().distance(&extracted.transform);
-            if mesh.source.state.blend.is_none() {
-                opaque_phase.add(Opaque3d {
-                    entity,
-                    pipeline: CachedRenderPipelineId::INVALID,
-                    draw_function: opaque_functions.read().id::<DrawOriginal>(),
-                    distance,
-                });
+            if instance.mesh.source.state.blend.is_none() {
+                opaque_phase.add(
+                    Opaque3dBatchSetKey {
+                        pipeline: CachedRenderPipelineId::INVALID,
+                        draw_function: opaque_functions.read().id::<DrawOriginal>(),
+                        material_bind_group_index: None,
+                        slabs: default(),
+                        lightmap_slab: None,
+                    },
+                    Opaque3dBinKey { asset_id: extracted.asset_id },
+                    (entity, main_entity),
+                    InputUniformIndex(0),
+                    BinnedRenderPhaseType::NonMesh,
+                );
             } else {
-                phase.add(Transparent3d {
-                    entity,
+                phase.add_transient(Transparent3d {
+                    entity: (entity, main_entity),
                     pipeline: CachedRenderPipelineId::INVALID,
                     draw_function: functions.read().id::<DrawOriginal>(),
-                    distance,
+                    distance: 0.0,
+                    sorting_info: TransparentSortingInfo3d::Sorted {
+                        mesh_center: extracted.transform.transform_point3(Vec3::ZERO),
+                        depth_bias: 0.0,
+                    },
+                    batch_range: 0..1,
+                    extra_index: PhaseItemExtraIndex::None,
+                    indexed: true,
                 });
             }
         }
@@ -741,30 +925,38 @@ fn queue_original(
 }
 
 struct DrawOriginal;
+
 impl<P: PhaseItem> RenderCommand<P> for DrawOriginal {
-    type ItemWorldQuery = ();
+    type ItemQuery = ();
     type Param = SRes<GpuMeshes>;
-    type ViewWorldQuery = Read<OriginalViewDraws>;
+    type ViewQuery = Read<OriginalViewDraws>;
 
     fn render<'w>(
         item: &P,
         view: &'w OriginalViewDraws,
-        _: (),
+        _: Option<()>,
         gpu: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
-        let Some(mesh) = gpu.into_inner().0.get(&item.entity()) else {
-            return RenderCommandResult::Failure;
+        let Some(instance) = gpu.into_inner().instances.get(&item.entity()) else {
+            return RenderCommandResult::Skip;
         };
         let Some(draw) = view.0.get(&item.entity()) else {
-            return RenderCommandResult::Failure;
+            return RenderCommandResult::Skip;
         };
-        pass.set_render_pipeline(&mesh.pipelines[&draw.key]);
+        let Ok(Some(pipeline)) = draw.pipeline.pipeline() else {
+            return RenderCommandResult::Skip;
+        };
+        let mesh = &instance.mesh;
+        pass.set_render_pipeline(pipeline);
         for (i, group) in draw.groups.iter().chain(mesh.textures.iter()).enumerate() {
             pass.set_bind_group(i, group, &[]);
         }
-        pass.set_index_buffer(mesh.indices.slice(..), 0, wgpu::IndexFormat::Uint32);
+        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..mesh.source.indices.len() as u32, 0, 0..1);
+        if let Some(faults) = &draw.faults {
+            faults.mark_drawn();
+        }
         RenderCommandResult::Success
     }
 }

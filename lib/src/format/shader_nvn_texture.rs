@@ -3,7 +3,7 @@
 use anyhow::{bail, ensure, Result};
 use remax::{
     maxwell::texture::TextureDimension,
-    wgsl::texture::{TextureBinding, TextureFilter, TextureSampling, TextureValueType},
+    resources::texture::{TextureBinding, TextureFilter, TextureSampling, TextureValueType},
 };
 
 use super::{

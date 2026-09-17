@@ -82,6 +82,12 @@ pub fn lower_graphics(
             && fragment_header.shader_type == 5,
         "expected vertex and pixel hardware headers"
     );
+    ensure!(
+        (0..8).all(|plane| {
+            vertex_header.vtg_attribute_enabled(0x2c0 + 4 * plane, true) == Some(false)
+        }),
+        "clip-distance exports require the semantic graphics compiler"
+    );
     let io = fragment_header.pixel_io().context("unsupported pixel hardware I/O map")?;
     ensure!(
         io.color_masks == [15, 0, 0, 0, 0, 0, 0, 0] && !io.writes_depth && !io.writes_sample_mask,

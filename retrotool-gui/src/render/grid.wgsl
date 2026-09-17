@@ -1,4 +1,4 @@
-#import bevy_render::view
+#import bevy_render::view::View
 
 @group(0) @binding(0)
 var<uniform> view: View;
@@ -14,7 +14,7 @@ struct VertexOutput {
 // Originally from https://asliceofrendering.com/scene%20helper/2020/01/05/InfiniteGrid/
 
 fn unproject_point(x: f32, y: f32, z: f32) -> vec3<f32> {
-    let unprojected = view.inverse_view_proj * vec4<f32>(x, y, z, 1.0);
+    let unprojected = view.world_from_clip * vec4<f32>(x, y, z, 1.0);
     return unprojected.xyz / unprojected.w;
 }
 
@@ -65,7 +65,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t = -in.near.y / (in.far.y - in.near.y);
     let pos = in.near + t * (in.far - in.near);
     let color = (grid(pos, 1.0, false) + grid(pos, 0.1, true)) * f32(t > 0.0);
-    let clip = view.view_proj * vec4<f32>(pos.xyz, 1.0);
+    let clip = view.clip_from_world * vec4<f32>(pos.xyz, 1.0);
     let depth = clip.z / clip.w;
     return color * (1.0 - NEAR / depth);
 }

@@ -98,11 +98,11 @@ allow = [
     "BSL-1.0",
     "CC0-1.0",
     "ISC",
-    "LicenseRef-UFL-1.0",
     "MIT",
     "MIT-0",
     "OFL-1.1",
     "Unicode-3.0",
+    "Ubuntu-font-1.0",
     "Zlib",
 ]
 # The confidence threshold for detecting a license from license text.
@@ -113,6 +113,7 @@ confidence-threshold = 0.8
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
 exceptions = [
+    { crate = "rustc_apfloat", allow = ["Apache-2.0 WITH LLVM-exception"] },
     # Each entry is the crate and version constraint, and its specific allow
     # list
     #{ allow = ["Zlib"], crate = "adler32" },

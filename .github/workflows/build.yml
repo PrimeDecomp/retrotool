@@ -35,12 +35,17 @@ jobs:
         run: cargo check
       - name: Cargo clippy
         run: cargo clippy
+      - name: Remax clippy
+        run: cargo clippy --manifest-path remax/Cargo.toml --all-targets
+      - name: Render integration clippy
+        run: cargo clippy --manifest-path render-tests/Cargo.toml --all-targets --no-deps
 
   deny:
     name: Deny
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        manifest: [Cargo.toml, remax/Cargo.toml, render-tests/Cargo.toml]
         checks:
           - advisories
           - bans licenses sources
@@ -51,7 +56,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
+          manifest-path: ${{ matrix.manifest }}
           command: check ${{ matrix.checks }}
+          command-arguments: --config deny.toml
 
   test:
     name: Test
@@ -73,6 +80,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Cargo test
         run: cargo test --release
+      - name: Remax test
+        run: cargo test --manifest-path remax/Cargo.toml --release
+      - name: Render integration test build
+        run: cargo test --manifest-path render-tests/Cargo.toml --release --no-run
 
   build-cli:
     name: Build (CLI)

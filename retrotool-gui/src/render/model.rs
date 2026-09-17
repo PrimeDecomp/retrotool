@@ -2,11 +2,10 @@ use std::{borrow::Cow, ops::Range};
 
 use anyhow::{Context, Result};
 use bevy::{
+    asset::RenderAssetUsages,
+    camera::primitives::Aabb,
+    mesh::{Indices, MeshVertexAttribute, VertexAttributeValues},
     prelude::*,
-    render::{
-        mesh::{Indices, MeshVertexAttribute, VertexAttributeValues},
-        primitives::Aabb,
-    },
 };
 use bit_set::BitSet;
 use half::prelude::*;
@@ -100,11 +99,10 @@ pub fn load_model(asset: &ModelAsset, meshes: &mut Assets<Mesh>) -> Result<Built
                 (Indices::U32(values), range)
             }
         };
-        let mut out_mesh = Mesh::new(PrimitiveTopology::TriangleList);
-        out_mesh.set_indices(Some(indices));
+        let mut out_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        out_mesh.insert_indices(indices);
         for (component, values) in &buf_infos[in_mesh.vtx_buf_idx as usize].attributes {
-            out_mesh
-                .insert_attribute(component.clone(), slice_vertices(values, vert_range.clone()));
+            out_mesh.insert_attribute(*component, slice_vertices(values, vert_range.clone()));
         }
         out_meshes.push(BuiltMesh {
             mesh: meshes.add(out_mesh),
@@ -279,34 +277,51 @@ fn convert_component(
 fn slice_vertices(values: &VertexAttributeValues, range: Range<usize>) -> VertexAttributeValues {
     use VertexAttributeValues::*;
     match values {
-        Float32(vec) => Float32(vec[range].to_vec()),
-        Sint32(vec) => Sint32(vec[range].to_vec()),
-        Uint32(vec) => Uint32(vec[range].to_vec()),
-        Float32x2(vec) => Float32x2(vec[range].to_vec()),
-        Sint32x2(vec) => Sint32x2(vec[range].to_vec()),
-        Uint32x2(vec) => Uint32x2(vec[range].to_vec()),
-        Float32x3(vec) => Float32x3(vec[range].to_vec()),
-        Sint32x3(vec) => Sint32x3(vec[range].to_vec()),
-        Uint32x3(vec) => Uint32x3(vec[range].to_vec()),
-        Float32x4(vec) => Float32x4(vec[range].to_vec()),
-        Sint32x4(vec) => Sint32x4(vec[range].to_vec()),
-        Uint32x4(vec) => Uint32x4(vec[range].to_vec()),
-        Sint16x2(vec) => Sint16x2(vec[range].to_vec()),
-        Snorm16x2(vec) => Snorm16x2(vec[range].to_vec()),
-        Uint16x2(vec) => Uint16x2(vec[range].to_vec()),
-        Unorm16x2(vec) => Unorm16x2(vec[range].to_vec()),
-        Sint16x4(vec) => Sint16x4(vec[range].to_vec()),
-        Snorm16x4(vec) => Snorm16x4(vec[range].to_vec()),
-        Uint16x4(vec) => Uint16x4(vec[range].to_vec()),
-        Unorm16x4(vec) => Unorm16x4(vec[range].to_vec()),
-        Sint8x2(vec) => Sint8x2(vec[range].to_vec()),
-        Snorm8x2(vec) => Snorm8x2(vec[range].to_vec()),
-        Uint8x2(vec) => Uint8x2(vec[range].to_vec()),
-        Unorm8x2(vec) => Unorm8x2(vec[range].to_vec()),
-        Sint8x4(vec) => Sint8x4(vec[range].to_vec()),
-        Snorm8x4(vec) => Snorm8x4(vec[range].to_vec()),
-        Uint8x4(vec) => Uint8x4(vec[range].to_vec()),
-        Unorm8x4(vec) => Unorm8x4(vec[range].to_vec()),
+        Uint8(values) => Uint8(values[range].to_vec()),
+        Uint8x2(values) => Uint8x2(values[range].to_vec()),
+        Uint8x4(values) => Uint8x4(values[range].to_vec()),
+        Sint8(values) => Sint8(values[range].to_vec()),
+        Sint8x2(values) => Sint8x2(values[range].to_vec()),
+        Sint8x4(values) => Sint8x4(values[range].to_vec()),
+        Unorm8(values) => Unorm8(values[range].to_vec()),
+        Unorm8x2(values) => Unorm8x2(values[range].to_vec()),
+        Unorm8x4(values) => Unorm8x4(values[range].to_vec()),
+        Snorm8(values) => Snorm8(values[range].to_vec()),
+        Snorm8x2(values) => Snorm8x2(values[range].to_vec()),
+        Snorm8x4(values) => Snorm8x4(values[range].to_vec()),
+        Uint16(values) => Uint16(values[range].to_vec()),
+        Uint16x2(values) => Uint16x2(values[range].to_vec()),
+        Uint16x4(values) => Uint16x4(values[range].to_vec()),
+        Sint16(values) => Sint16(values[range].to_vec()),
+        Sint16x2(values) => Sint16x2(values[range].to_vec()),
+        Sint16x4(values) => Sint16x4(values[range].to_vec()),
+        Unorm16(values) => Unorm16(values[range].to_vec()),
+        Unorm16x2(values) => Unorm16x2(values[range].to_vec()),
+        Unorm16x4(values) => Unorm16x4(values[range].to_vec()),
+        Snorm16(values) => Snorm16(values[range].to_vec()),
+        Snorm16x2(values) => Snorm16x2(values[range].to_vec()),
+        Snorm16x4(values) => Snorm16x4(values[range].to_vec()),
+        Float16(values) => Float16(values[range].to_vec()),
+        Float16x2(values) => Float16x2(values[range].to_vec()),
+        Float16x4(values) => Float16x4(values[range].to_vec()),
+        Float32(values) => Float32(values[range].to_vec()),
+        Float32x2(values) => Float32x2(values[range].to_vec()),
+        Float32x3(values) => Float32x3(values[range].to_vec()),
+        Float32x4(values) => Float32x4(values[range].to_vec()),
+        Uint32(values) => Uint32(values[range].to_vec()),
+        Uint32x2(values) => Uint32x2(values[range].to_vec()),
+        Uint32x3(values) => Uint32x3(values[range].to_vec()),
+        Uint32x4(values) => Uint32x4(values[range].to_vec()),
+        Sint32(values) => Sint32(values[range].to_vec()),
+        Sint32x2(values) => Sint32x2(values[range].to_vec()),
+        Sint32x3(values) => Sint32x3(values[range].to_vec()),
+        Sint32x4(values) => Sint32x4(values[range].to_vec()),
+        Float64(values) => Float64(values[range].to_vec()),
+        Float64x2(values) => Float64x2(values[range].to_vec()),
+        Float64x3(values) => Float64x3(values[range].to_vec()),
+        Float64x4(values) => Float64x4(values[range].to_vec()),
+        Unorm10_10_10_2(values) => Unorm10_10_10_2(values[range].to_vec()),
+        Unorm8x4Bgra(values) => Unorm8x4Bgra(values[range].to_vec()),
     }
 }
 

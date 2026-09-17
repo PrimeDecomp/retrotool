@@ -26,3 +26,6 @@ and activation rules before they describe a live scene.
 - [Scene construction](scene.md): layers, load units, generated objects and script links.
 - [Animation](animation.md): UV evaluation, skinning palettes and changing scene colors.
 - [Research references](references.md): executable identity, entry points and external ISA references.
+
+Renderer maintenance: [graphics compatibility workarounds](rendering-compatibility.md)
+records version-specific constraints and their removal conditions.

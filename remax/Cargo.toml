@@ -8,7 +8,19 @@ edition = "2021"
 publish = false
 repository = "https://github.com/PrimeDecomp/retrotool"
 
+# Keep compiler tests independent of the viewer's graphics dependency versions.
+[workspace]
+resolver = "2"
+
 [dependencies]
 anyhow = "1.0.69"
+petgraph = { version = "0.8.3", default-features = false, features = ["std"] }
+rustc_apfloat = "0.2.3"
 serde = "1.0.156"
 serde_derive = "1.0.156"
+
+[dev-dependencies]
+naga = { version = "0.11.1", features = ["wgsl-in", "validate"] }
+naga_next = { package = "naga", version = "29.0.4", features = ["wgsl-in"] }
+wgpu = { version = "29.0.4", default-features = false, features = ["std", "metal", "vulkan", "dx12", "wgsl"] }
+pollster = "0.4.0"

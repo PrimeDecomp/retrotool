@@ -2,6 +2,10 @@
 //! This is derived scene state, not another serialized LTPB header. The caller
 //! supplies the selected scene bounds and world-to-storage transform.
 
+pub mod probe;
+pub mod residency;
+pub mod volume;
+
 use anyhow::{ensure, Context, Result};
 use zerocopy::ByteOrder;
 
@@ -193,6 +197,12 @@ impl ProbeVolumeLayout {
     }
 
     pub fn layer(&self, layer: u32) -> Result<ProbeLayerLayout> {
+        ProbeLayerLayout::for_volume(self.grid_origin, self.dimensions, layer)
+    }
+}
+
+impl ProbeLayerLayout {
+    fn for_volume(grid_origin: [i32; 3], dimensions: [u32; 3], layer: u32) -> Result<Self> {
         ensure!(layer < 6, "Unknown probe texture layer {layer}");
         let (format, tile_dimensions) = if layer < 2 {
             (ETextureFormat::BptcUfloat, [64u32, 64, 16])
@@ -200,12 +210,14 @@ impl ProbeVolumeLayout {
             (ETextureFormat::RgbaBc1Unorm, [128u32, 64, 16])
         };
         let min_tile =
-            std::array::from_fn(|i| self.grid_origin[i].div_euclid(tile_dimensions[i] as i32));
-        let tile_counts = std::array::from_fn(|i| self.dimensions[i] / tile_dimensions[i]);
+            std::array::from_fn(|i| grid_origin[i].div_euclid(tile_dimensions[i] as i32));
+        let tile_counts = std::array::from_fn(|i| dimensions[i] / tile_dimensions[i]);
         let mut max_tile = [0; 3];
         for i in 0..3 {
             ensure!(
-                self.dimensions[i] % tile_dimensions[i] == 0 && tile_counts[i] > 0,
+                grid_origin[i].rem_euclid(tile_dimensions[i] as i32) == 0
+                    && dimensions[i].is_multiple_of(tile_dimensions[i])
+                    && tile_counts[i] > 0,
                 "Probe volume is not tile aligned"
             );
             max_tile[i] = i32::try_from(i64::from(min_tile[i]) + i64::from(tile_counts[i]) - 1)?;
@@ -219,9 +231,7 @@ impl ProbeVolumeLayout {
             bytes_per_tile: 65536,
         })
     }
-}
 
-impl ProbeLayerLayout {
     pub fn linear_byte_len(&self) -> Result<usize> {
         let tiles = self
             .tile_counts
@@ -246,15 +256,7 @@ impl ProbeLayerLayout {
             return Ok(None);
         };
         ensure!(target.len() == self.linear_byte_len()?, "Wrong probe volume byte size");
-        ensure!(
-            texture.head.kind == ETextureType::D3
-                && texture.head.format == self.format
-                && [texture.head.width, texture.head.height, texture.head.layers]
-                    == self.tile_dimensions
-                && texture.head.mip_sizes.len() == 1
-                && texture.data.len() as u64 == self.bytes_per_tile,
-            "Probe tile texture does not match its layer layout"
-        );
+        self.validate_texture(texture)?;
         let (bw, bh, bd) = self.format.block_size();
         ensure!(bd == 1, "Unsupported probe block depth");
         let (bw, bh) = (u32::from(bw), u32::from(bh));
@@ -275,6 +277,19 @@ impl ProbeLayerLayout {
             }
         }
         Ok(Some(mapping))
+    }
+
+    fn validate_texture<O: ByteOrder>(&self, texture: &TextureData<O>) -> Result<()> {
+        ensure!(
+            texture.head.kind == ETextureType::D3
+                && texture.head.format == self.format
+                && [texture.head.width, texture.head.height, texture.head.layers]
+                    == self.tile_dimensions
+                && texture.head.mip_sizes.len() == 1
+                && texture.data.len() as u64 == self.bytes_per_tile,
+            "Probe tile texture does not match its layer layout"
+        );
+        Ok(())
     }
 
     /// Native PointInside is inclusive. Out-of-volume tiles produce no mapping.

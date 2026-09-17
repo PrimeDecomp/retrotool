@@ -1,0 +1,12 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "BakedLightingPriorityModifierMP1",
+  "type": "property_list",
+  "properties": {
+    "0x8582d268": {
+      "name": "Priority",
+      "type": "i32",
+      "description": "Default 1. Active entity-load and activation callbacks set the owning area's baked-lighting context priority; deactivation does not restore it."
+    }
+  }
+}

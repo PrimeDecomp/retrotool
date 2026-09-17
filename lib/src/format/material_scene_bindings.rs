@@ -1,4 +1,4 @@
-//! Runtime AMBS/BPTX/CLPP/REFL material data and their native binding operations.
+//! Runtime scene material data and their native binding operations.
 //!
 //! These are memory snapshots, not additional serialized MTRL records. A caller
 //! resolves providers and memory, then maps packed variables through reflection.
@@ -7,16 +7,17 @@
 use std::borrow::Cow;
 
 use anyhow::{ensure, Context, Result};
-use remax::wgsl::texture::TextureBinding;
+use remax::resources::texture::TextureBinding;
 use serde_derive::Serialize;
 
+mod inputs;
+pub use inputs::{DrawUniform, SceneMaterialInputs, SceneTextureInput};
+
 use super::{
-    cmdl::{CMaterialData, CMaterialDataInner, EMaterialDataId, EMaterialDataType},
     material_ambient::AmbientSource,
     material_feature_semantics::semantic_names,
     material_features::FeatureVariable,
-    material_predicates::{MaterialSelectionState, SelectionValue},
-    model_animated_uv::AnimatedUvSnapshot,
+    model_data::{animated_uv::AnimatedUvSnapshot, wind::WindSnapshot},
     texture_sampler::TextureSamplerParams,
     txtr::{ETextureFormat, ETextureType},
 };
@@ -28,6 +29,7 @@ pub enum SceneMaterialKind {
     BakedProbeTextures,
     ClusteredLights,
     ReflectionProbe,
+    Wind,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -45,11 +47,12 @@ impl FeatureVariable<'_> {
             ("BPTX", 1 | 2) => Some(SceneMaterialKind::BakedProbeTextures),
             ("CLPP", 1 | 2) => Some(SceneMaterialKind::ClusteredLights),
             ("REFL", 1) => Some(SceneMaterialKind::ReflectionProbe),
+            ("WIND", 1) => Some(SceneMaterialKind::Wind),
             _ => None,
         }
     }
 
-    /// Enabled AMBS/BPTX/CLPP/REFL requests. BPTX option1 honors flag bit0
+    /// Enabled scene requests. BPTX option1 honors flag bit0
     /// for its two matrices; option2 always writes its matrix and first texture.
     /// Optional shared shadow textures additionally test packed != 0xffff.
     /// Other enabled semantics retain unbound variables until the final sink.
@@ -237,134 +240,16 @@ impl<'a> BakedProbeTextureSnapshot<'a> {
 #[derive(Debug)]
 pub enum SceneMaterialSnapshot<'a> {
     AnimatedUv(AnimatedUvSnapshot),
+    Wind(WindSnapshot),
     AmbientLight(AmbientSource),
     BakedProbeTextures(BakedProbeTextureSnapshot<'a>),
     ClusteredLights(ClusteredLightingSnapshot<'a>),
     ReflectionProbe(ReflectionProbeSnapshot<'a>),
 }
 
-/// Caller-resolved draw-context data. Missing Complex entries are unresolved;
-/// an entry containing None is explicitly absent. Ordinary uniform values take
-/// precedence over model providers. This is not a scene extractor.
-#[derive(Debug, Default)]
-pub struct SceneMaterialInputs<'a> {
-    pub flags: u32,
-    data: Vec<(EMaterialDataId, Option<SceneMaterialSnapshot<'a>>)>,
-    uniforms: Vec<CMaterialData>,
-    texture_views: Vec<(u64, Option<u64>, SceneTextureView)>,
-}
-
-impl<'a> SceneMaterialInputs<'a> {
-    /// Supply a resolved ordinary draw-context value, before the model's own
-    /// providers. Uses the existing typed INT/FLT/MAT4 binders; no scene defaults
-    /// are inferred. BLCM and BLAL are examples of scene color values.
-    pub fn set_uniform(&mut self, data: CMaterialData) -> Result<()> {
-        let kind = match &data.data {
-            CMaterialDataInner::Int1(_) => EMaterialDataType::Int1,
-            CMaterialDataInner::Int4(_) => EMaterialDataType::Int4,
-            CMaterialDataInner::Scalar(_) => EMaterialDataType::Scalar,
-            CMaterialDataInner::Color(_) => EMaterialDataType::Color,
-            CMaterialDataInner::Mat4(_) => EMaterialDataType::Mat4,
-            _ => anyhow::bail!("Scene uniform is not ordinary typed data"),
-        };
-        ensure!(
-            data.data_type == kind && data.data_id.data_type() == kind,
-            "Scene uniform data ID/type mismatch"
-        );
-        if let Some(entry) = self.uniforms.iter_mut().find(|v| v.data_id == data.data_id) {
-            *entry = data;
-        } else {
-            self.uniforms.push(data);
-        }
-        Ok(())
-    }
-
-    pub fn uniform_data(&self, id: EMaterialDataId) -> Option<&CMaterialData> {
-        self.uniforms.iter().find(|v| v.data_id == id)
-    }
-
-    /// Resolve the exact default/custom sampler request made by a scene binder.
-    /// A texture token with a different sampler request needs a separate entry.
-    pub fn set_texture_view(&mut self, texture: u64, sampler: Option<u64>, view: SceneTextureView) {
-        if let Some(entry) =
-            self.texture_views.iter_mut().find(|v| v.0 == texture && v.1 == sampler)
-        {
-            entry.2 = view;
-        } else {
-            self.texture_views.push((texture, sampler, view));
-        }
-    }
-
-    pub fn texture_view(&self, texture: u64, sampler: Option<u64>) -> Result<SceneTextureView> {
-        self.texture_views
-            .iter()
-            .find(|v| v.0 == texture && v.1 == sampler)
-            .map(|v| v.2)
-            .with_context(|| {
-                format!("Unresolved scene texture view {texture:#x}, sampler {sampler:?}")
-            })
-    }
-
-    pub fn set(
-        &mut self,
-        id: EMaterialDataId,
-        data: Option<SceneMaterialSnapshot<'a>>,
-    ) -> Result<()> {
-        ensure!(id.data_type() == EMaterialDataType::Complex, "Scene data ID is not Complex");
-        if let Some(entry) = self.data.iter_mut().find(|(key, _)| *key == id) {
-            entry.1 = data;
-        } else {
-            self.data.push((id, data));
-        }
-        Ok(())
-    }
-
-    pub fn get(&self, id: EMaterialDataId) -> Result<Option<&SceneMaterialSnapshot<'a>>> {
-        Ok(self
-            .data
-            .iter()
-            .find(|(key, _)| *key == id)
-            .with_context(|| format!("Unresolved scene material {id:?}"))?
-            .1
-            .as_ref())
-    }
-
-    /// Presence and typed selection values must agree with the bound snapshots.
-    pub fn selection_state(&self) -> MaterialSelectionState {
-        let mut state = MaterialSelectionState::default();
-        state.flags = self.flags;
-        for data in &self.uniforms {
-            state.set_material_data(data);
-        }
-        for (id, data) in &self.data {
-            if let Some(data) = data {
-                let value = match data {
-                    SceneMaterialSnapshot::AnimatedUv(data) => {
-                        SelectionValue::AnimatedUv { mode: data.mode }
-                    }
-                    SceneMaterialSnapshot::BakedProbeTextures(probe) => {
-                        SelectionValue::BakedProbeTextures {
-                            textures: probe.texture_tokens().map(|token| token != 0),
-                        }
-                    }
-                    SceneMaterialSnapshot::ClusteredLights(cluster) => {
-                        SelectionValue::ClusteredLights {
-                            mask_source: word(cluster.raw, 0x40),
-                            has_shadow_maps: cluster.raw[0x68] != 0,
-                        }
-                    }
-                    _ => SelectionValue::Present,
-                };
-                state.set(*id, value);
-            }
-        }
-        state
-    }
-}
-
 /// Resolve one complete leaf feature's variable group. `None` data means known
 /// absence, not an unresolved provider: AMBS/CLPP supply native defaults, while
-/// BPTX succeeds with no writes and REFL reports failure with no writes.
+/// BPTX succeeds with no writes and REFL/WIND report failure with no writes.
 /// Unknown definitions/inactive options
 /// return None. The caller maps writes through shader reflection and supplies
 /// actual cache textures, token views and sampler choices.
@@ -398,6 +283,16 @@ pub fn bind_scene_feature<'a>(
         });
     };
     match kind {
+        SceneMaterialKind::Wind => {
+            if let Some(data) = data {
+                let SceneMaterialSnapshot::Wind(snapshot) = data else {
+                    anyhow::bail!("Wrong scene material type for WIND");
+                };
+                write(0, SceneBindingValue::Raw(Cow::Owned(snapshot.to_bytes().to_vec())));
+            } else {
+                result.success = false;
+            }
+        }
         SceneMaterialKind::BakedProbeTextures => {
             if let Some(data) = data {
                 let SceneMaterialSnapshot::BakedProbeTextures(probe) = data else {
@@ -525,6 +420,9 @@ fn default_shadow_data(point: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::cmdl::{
+        CMaterialData, CMaterialDataInner, EMaterialDataId, EMaterialDataType,
+    };
 
     #[test]
     fn resolved_scene_presence_matches_selection_and_does_not_invent_absence() -> Result<()> {
@@ -539,6 +437,34 @@ mod tests {
         )?;
         assert_eq!(scene.selection_state().select_definition("AMBS", &["ALLD"], 3)?, Some(1));
         assert!(scene.set(EMaterialDataId::DIFT, None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn wind_binding_preserves_payload_and_native_missing_data_failure() -> Result<()> {
+        let snapshot = WindSnapshot {
+            vectors: std::array::from_fn(|row| {
+                std::array::from_fn(|column| (row * 4 + column) as f32)
+            }),
+            bounds_padding: [9.0; 3],
+        };
+        let data = SceneMaterialSnapshot::Wind(snapshot);
+        let mut variables = variables("WIND", 1);
+        variables[0].data_ids = vec!["WIND"];
+        variables[0].packed = 3;
+        let result = bind_scene_feature(&variables, Some(&data))?.unwrap();
+        assert!(result.success);
+        assert_eq!(result.writes.len(), 1);
+        assert_eq!(result.writes[0].packed, 3);
+        let SceneBindingValue::Raw(bytes) = &result.writes[0].value else {
+            panic!("Expected raw WIND data")
+        };
+        assert_eq!(bytes.as_ref(), snapshot.to_bytes());
+        let missing = bind_scene_feature(&variables, None)?.unwrap();
+        assert!(!missing.success);
+        assert!(missing.writes.is_empty());
+        variables[0].definition_option = 0;
+        assert!(bind_scene_feature(&variables, Some(&data))?.is_none());
         Ok(())
     }
 
@@ -581,6 +507,40 @@ mod tests {
     }
 
     #[test]
+    fn scene_textures_select_the_declared_view_and_override_model_providers() -> Result<()> {
+        use super::super::material_predicates::{MaterialSelectionState, SelectionValue};
+
+        let mut scene = SceneMaterialInputs::default();
+        let mut input = SceneTextureInput {
+            token: 7,
+            tex_coord: Some(0),
+            view: SceneTextureView {
+                kind: ETextureType::D2,
+                format: ETextureFormat::BptcUfloat,
+                sampler: TextureSamplerParams::simple(1, [0; 3], 0),
+                mip_level_count: Some(1),
+            },
+        };
+        assert!(scene.set_texture(EMaterialDataId::BLCM, input).is_err());
+        scene.set_texture(EMaterialDataId::BLAT, input)?;
+        let mut model = MaterialSelectionState::default();
+        model.set(EMaterialDataId::BLAT, SelectionValue::Texture(ETextureType::Cube));
+        let mut selection = scene.selection_state();
+        selection.append_fallback(&model);
+        assert_eq!(selection.select_definition("TEXS", &["BLAT"], 0x7ff)?, Some(3));
+
+        input.token = 8;
+        input.view.kind = ETextureType::D3;
+        scene.set_texture(EMaterialDataId::BLAT, input)?;
+        assert_eq!(scene.texture(EMaterialDataId::BLAT).unwrap().token, 8);
+        assert_eq!(scene.selection_state().select_definition("TEXS", &["BLAT"], 0x7ff)?, Some(4));
+        input.token = 0;
+        assert!(scene.set_texture(EMaterialDataId::BLAT, input).is_err());
+        assert_eq!(scene.texture(EMaterialDataId::BLAT).unwrap().token, 8);
+        Ok(())
+    }
+
+    #[test]
     fn scene_uniforms_participate_in_selection_and_replace_prior_values() -> Result<()> {
         use crate::format::CColor4f;
         let mut scene = SceneMaterialInputs::default();
@@ -607,6 +567,26 @@ mod tests {
         let mut wrong = color(1.0);
         wrong.data_id = EMaterialDataId::BLPT;
         assert!(scene.set_uniform(wrong).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn draw_uniform_declarations_replace_fixed_values_without_inventing_bytes() -> Result<()> {
+        let mut scene = SceneMaterialInputs::default();
+        let camera = || CMaterialData {
+            data_id: EMaterialDataId::LODP,
+            data_type: EMaterialDataType::Color,
+            data: CMaterialDataInner::Color([2.0, 3.0, 4.0, 1.0].into()),
+        };
+        scene.set_uniform(camera())?;
+        scene.set_draw_uniform(DrawUniform::LodParameters);
+        assert!(scene.uniform_data(EMaterialDataId::LODP).is_none());
+        assert_eq!(scene.draw_uniform(EMaterialDataId::LODP), Some(DrawUniform::LodParameters));
+        assert_eq!(scene.selection_state().select_definition("FLT4", &["LODP"], 3)?, Some(1));
+
+        scene.set_uniform(camera())?;
+        assert!(scene.draw_uniform(EMaterialDataId::LODP).is_none());
+        assert!(scene.uniform_data(EMaterialDataId::LODP).is_some());
         Ok(())
     }
 

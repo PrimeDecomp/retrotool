@@ -1,0 +1,81 @@
+// Original startup SimpleColor/x/permutation0x12 pair, SNVN source271.
+// Scheduling words and unreachable tail padding are omitted.
+
+// Full original VERTEX code SHA256: 4b4dd1df4f1416dcaa8dc3165a6800faab826da46af8bdb74d967d3024b00af2.
+
+pub(super) const VERTEX: &[u64] = &[
+    0xefd87f800847ff04,
+    0xefd87f800807ff06,
+    0xefd87f800887ff05,
+    0xefd87f800907ff07,
+    0xefd87f800947ff08,
+    0xefd87f800987ff09,
+    0x4c68100c00470400,
+    0xefd87f8009c7ff0a,
+    0x4c68100c00570401,
+    0x49a0000c00070602,
+    0xeff07f800807ff07,
+    0x49a0008c00170603,
+    0xeff07f800847ff08,
+    0x4c68100c00670400,
+    0xeff07f800887ff09,
+    0x4c68100c00770401,
+    0xeff07f8008c7ff0a,
+    0x49a0010c00870502,
+    0x49a0000c00270600,
+    0x49a0018c00970503,
+    0x49a0008c00370601,
+    0x4c58100c00c70202,
+    0x49a0000c00a70500,
+    0xeff07f800707ff02,
+    0x49a0008c00b70501,
+    0x4c58100c00d70303,
+    0x4c58100c00e70000,
+    0xeff07f800747ff03,
+    0x4c58100c00f70101,
+    0xeff07f800787ff00,
+    0xeff07f8007c7ff01,
+    0xe30000000007000f,
+];
+
+pub(super) const VERTEX_HEADER: [u32; 20] =
+    [33948769, 0, 0, 0, 0, 0, 247, 0, 0, 0, 0, 0, 0, 1044480, 0, 0, 0, 0, 0, 0];
+
+// Full original FRAGMENT code SHA256: 2bdc24c6fab0b1ffda708d7fd1cfa2a9abf14774576da26f024188d5dc255212.
+
+pub(super) const FRAGMENT: &[u64] = &[
+    0x5c9807800ff70006,
+    0xe003ff874ff7ff02,
+    0x5c9807800ff70007,
+    0xe003ff870ff7ff01,
+    0x5cb0108000270a02,
+    0x5cb0108000170a01,
+    0x4c47000018f70200,
+    0x4c47000018e70103,
+    0x4c48008018e70004,
+    0xefe8e0028007ff00,
+    0x5c10000000470303,
+    0x4c47000018c70000,
+    0x4c48008018d70303,
+    0x5c10000000370008,
+    0xef90000062070808,
+    0x3848008000470800,
+    0x3848008000870801,
+    0x3604009000170008,
+    0xe0238407cff7ff09,
+    0x5080000000470909,
+    0xe06384084097ff01,
+    0xe06384080097ff00,
+    0xe06384088097ff02,
+    0xe0638408c097ff03,
+    0x1e23f37175970105,
+    0x49a0028400070004,
+    0x5c9807800ff70005,
+    0x49a0020400170204,
+    0xe30000000007000f,
+];
+
+pub(super) const FRAGMENT_HEADER: [u32; 20] =
+    [414818, 0, 0, 0, 0, 2952790016, 170, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0];
+
+pub(super) const FRAGMENT_CONSTANTS: &[u8] = &[208, 179, 89, 62, 152, 221, 147, 61];

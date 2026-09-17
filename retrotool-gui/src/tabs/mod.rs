@@ -7,9 +7,9 @@ pub mod splash;
 pub mod templates;
 pub mod texture;
 
-use bevy::{ecs::system::*, prelude::*, render::camera::*};
+use bevy::{ecs::system::*, prelude::*};
 use egui::Widget;
-use egui_dock::{NodeIndex, Style, TabIndex};
+use egui_dock::{widgets::tab_viewer::OnCloseResponse, NodePath, TabStyle};
 use uuid::Uuid;
 
 use crate::{icon, AssetRef};
@@ -18,22 +18,26 @@ pub type TabType = Box<dyn EditorTab>;
 
 pub struct OpenTab {
     pub tab: TabType,
-    pub node: Option<NodeIndex>,
+    pub node: Option<NodePath>,
 }
 
 #[derive(Default)]
 pub struct TabState {
     pub open_assets: Vec<AssetRef>,
     pub open_tab: Option<OpenTab>,
-    #[allow(unused)]
-    pub viewport: Viewport,
-    pub render_layer: u8,
-    pub close_all: Option<NodeIndex>,
-    pub close_others: Option<(NodeIndex, TabIndex)>,
+    pub render_layer: usize,
+    pub close_all: Option<NodePath>,
+    pub close_others: Option<(NodePath, String)>,
+    pub package_session: u64,
+    pub clear_packages: bool,
 }
 
 impl TabState {
     fn open_tab(&mut self, tab: TabType) { self.open_tab = Some(OpenTab { tab, node: None }); }
+
+    pub fn asset_path(&self, asset: AssetRef) -> bevy::asset::AssetPath<'static> {
+        crate::loaders::package::asset_path(self.package_session, asset)
+    }
 }
 
 pub trait EditorTab: Send + Sync {
@@ -47,6 +51,8 @@ pub trait EditorTab: Send + Sync {
     fn ui(&mut self, world: &mut World, ui: &mut egui::Ui, tab_state: &mut TabState);
 
     fn close(&mut self, world: &mut World) -> bool;
+
+    fn clear_assets(&mut self, world: &mut World);
 
     fn title(&self) -> egui::WidgetText;
 
@@ -65,6 +71,8 @@ pub trait EditorTabSystem: Send + Sync {
     fn load(&mut self, _query: SystemParamItem<Self::LoadParam>) {}
 
     fn close(&mut self, _query: SystemParamItem<Self::LoadParam>) -> bool { true }
+
+    fn clear_assets(&mut self, _query: SystemParamItem<Self::LoadParam>) {}
 
     fn ui(
         &mut self,
@@ -85,23 +93,40 @@ pub trait EditorTabSystem: Send + Sync {
 impl<T: EditorTabSystem> EditorTab for T {
     fn load(&mut self, world: &mut World) {
         let mut state: SystemState<T::LoadParam> = SystemState::new(world);
-        EditorTabSystem::load(self, state.get_mut(world));
+        EditorTabSystem::load(self, state.get_mut(world).expect("editor tab system parameters"));
         state.apply(world);
     }
 
     fn ui(&mut self, world: &mut World, ui: &mut egui::Ui, tab_state: &mut TabState) {
         let mut state: SystemState<T::UiParam> = SystemState::new(world);
         ui.push_id(self.id(), |ui| {
-            EditorTabSystem::ui(self, ui, state.get_mut(world), tab_state);
+            EditorTabSystem::ui(
+                self,
+                ui,
+                state.get_mut(world).expect("editor tab system parameters"),
+                tab_state,
+            );
         });
         state.apply(world);
     }
 
     fn close(&mut self, world: &mut World) -> bool {
         let mut state: SystemState<T::LoadParam> = SystemState::new(world);
-        let result = EditorTabSystem::close(self, state.get_mut(world));
+        let result = EditorTabSystem::close(
+            self,
+            state.get_mut(world).expect("editor tab system parameters"),
+        );
         state.apply(world);
         result
+    }
+
+    fn clear_assets(&mut self, world: &mut World) {
+        let mut state: SystemState<T::LoadParam> = SystemState::new(world);
+        EditorTabSystem::clear_assets(
+            self,
+            state.get_mut(world).expect("editor tab system parameters"),
+        );
+        state.apply(world);
     }
 
     fn title(&self) -> egui::WidgetText { EditorTabSystem::title(self) }
@@ -125,28 +150,30 @@ impl egui_dock::TabViewer for TabViewer<'_> {
         tab.ui(self.world, ui, &mut self.state);
     }
 
-    fn context_menu(
-        &mut self,
-        ui: &mut egui::Ui,
-        _tab: &mut Self::Tab,
-        node: NodeIndex,
-        tab_index: TabIndex,
-    ) {
+    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, node: NodePath) {
         if ui.button("Close others in group").clicked() {
-            self.state.close_others = Some((node, tab_index));
-            ui.close_menu();
+            self.state.close_others = Some((node, tab.id()));
+            ui.close();
         };
         if ui.button("Close all in group").clicked() {
             self.state.close_all = Some(node);
-            ui.close_menu();
+            ui.close();
         };
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText { tab.title() }
 
-    fn on_close(&mut self, tab: &mut Self::Tab) -> bool { tab.close(self.world) }
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id { egui::Id::new(tab.id()) }
 
-    fn add_popup(&mut self, ui: &mut egui::Ui, node: NodeIndex) {
+    fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
+        if tab.close(self.world) {
+            OnCloseResponse::Close
+        } else {
+            OnCloseResponse::Ignore
+        }
+    }
+
+    fn add_popup(&mut self, ui: &mut egui::Ui, node: NodePath) {
         ui.set_min_width(100.0);
         ui.style_mut().visuals.button_frame = false;
 
@@ -160,11 +187,13 @@ impl egui_dock::TabViewer for TabViewer<'_> {
         }
     }
 
-    fn inner_margin_override(&self, tab: &Self::Tab, style: &Style) -> egui::Margin {
-        if self.clear_background(tab) {
-            style.default_inner_margin
+    fn tab_style_override(&self, tab: &Self::Tab, style: &TabStyle) -> Option<TabStyle> {
+        if tab.clear_background() {
+            None
         } else {
-            egui::Margin::same(0.0)
+            let mut style = style.clone();
+            style.tab_body.inner_margin = egui::Margin::ZERO;
+            Some(style)
         }
     }
 
@@ -179,7 +208,7 @@ pub fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) -> egui
             .ui(ui)
             .on_hover_text_at_pointer("Click to copy");
         if response.clicked() {
-            ui.output_mut(|out| out.copied_text = value);
+            ui.ctx().copy_text(value);
         }
         response
     })
@@ -189,7 +218,7 @@ pub fn property_with_value(ui: &mut egui::Ui, name: &str, value: String) -> egui
 pub fn property_with_id(ui: &mut egui::Ui, name: &str, id: Uuid) {
     property_with_value(ui, name, id.to_string()).context_menu(|ui| {
         if ui.button("Open").clicked() {
-            ui.output_mut(|out| out.copied_text = id.to_string());
+            ui.ctx().copy_text(id.to_string());
         }
     });
 }

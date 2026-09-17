@@ -14,7 +14,7 @@ pub struct AttributeAccess {
     /// Byte-address register;255 means the direct attribute address is used.
     pub address_register: u8,
     pub byte_offset: u16,
-    ///255 denotes the current vertex; other values need stage-specific handling.
+    /// 255 denotes the current vertex; other values need stage-specific handling.
     pub vertex_register: u8,
     pub components: u8,
     pub patch: bool,
@@ -36,14 +36,14 @@ pub struct AttributeAddress {
     pub destination: u8,
     pub predicate_destination: u8,
     pub address_register: u8,
-    /// Signed11-bit byte displacement in nvdisasm; ALD/AST use unsigned10 bits.
+    /// Signed 11-bit byte displacement in nvdisasm; ALD/AST use unsigned 10 bits.
     pub byte_offset: i16,
     pub components: u8,
     pub output: bool,
     pub unrecognized_bits: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash)]
 pub enum InterpolationMode {
     Pass,
     Perspective,
@@ -51,7 +51,7 @@ pub enum InterpolationMode {
     State,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum InterpolationLocation {
     Default,
     Centroid,
@@ -73,7 +73,7 @@ pub struct Interpolation {
     pub offset_register: u8,
     pub mode: InterpolationMode,
     pub location_code: u8,
-    /// Code3 prints INVALID in nvdisasm; never assume a default location.
+    /// Code 3 prints INVALID in nvdisasm; never assume a default location.
     pub location: Option<InterpolationLocation>,
     pub saturate: bool,
     pub unrecognized_bits: u64,

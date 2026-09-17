@@ -1,5 +1,70 @@
 # From ROOM definitions to a scene
 
+## Model containers
+
+MCON has two placement paths. Ordinary visuals select shared CMDL resources
+and modulation colors by index; table order does not imply grouping by model.
+Both ordinary and instanced native draws use the selected color. The deferred
+pass also adds per-instance G-buffer flags.
+
+World-model placements instead contain a WMDL resource ID and a transform.
+Their resource table supplies preload tokens; it is not the placement list.
+The ModCon component creates a separate world-model scene node for each
+placement (`BuildWorldModels`, `0x71007a55b8`). These nodes also follow the
+component's effective activity and scene-visibility gate.
+
+The engine composes the container's parent transform with each visual transform
+before computing world bounds and mirroring. Native
+`CModConRenderData::Allocate` (`0x71001be62c`), `WriteBaseInstancingComponents`
+(`0x71001c0144`) and `RenderUnsortedEntryConcurrent` (`0x71001b5bcc`) establish
+these relationships. See the [MCON parser](../lib/src/format/mcon.rs).
+
+Visibility uses the world-aligned box enclosing each transformed model's authored
+bounds. Recomputing a box from individual meshes, or testing the transformed local
+box directly, can reject draws the native owner retains. MCON does not add the
+dynamic padding offered by WIND; [wind ownership](animation.md#wind) differs for
+world-model renderables.
+
+The two placement paths have separate atlas-lookup arrays, indexed by placement
+order. An empty array disables atlas lookup; an invalid individual lookup also
+disables it for that placement. Sharing a model resource does not imply sharing
+its baked UV transform. Atlas textures and lighting context come from the area.
+
+The ROOM's ModCon component references the container resource. Its native
+`EntityLoaded` (`0x71007a5168`) takes the owning area's transform, rather than
+the Entity's authored transform, and passes it to ordinary visuals, world-model
+placements and collision construction. A ROOM-local inspection can use an
+identity area transform; assembling several rooms requires their area placement.
+The surrounding ROOM supplies loading and activity state, and MCON's remaining
+spatial tables control queries beyond these geometry relationships.
+
+MCDD adds geometry decals independently of the visual meshes. Its shared IDs
+refer to MATI material instances. The owner composes each decal's placement
+with the container transform, extracts the axis scales and halves them for
+projection extents. The decal manager generates geometry from eligible scene
+surfaces through a stream-out pass, then draws it with the selected material
+and sort order. Loading the placements therefore requires both MATI support
+and receiver-geometry generation to reproduce their appearance; a textured
+quad is insufficient. `BuildModConDecals` (`0x71007a61d4`) and
+`submit_new_stream_out_requests` (`0x7100203b90`) establish this path.
+The [decal parser](../lib/src/format/mcon/decal.rs) preserves the remaining
+fields whose roles are unresolved.
+
+The static generator tests the receiver triangle's angle and rejects a triangle
+only when all three vertices lie outside a common box plane. Accepted triangles
+keep their original vertices; generation does not clip or subdivide them. It
+adds projected UVs and six signed plane distances. The final decal vertex shader
+exports those distances to hardware clip planes, which perform the box clipping.
+The stream-out layout reuses bone-weight and bone-index semantics for these
+distances; they do not describe skinning.
+
+Receiver draws use mesh-index group zero rather than the camera-selected LOD.
+MCON receivers test visual-instance world bounds; world-model receivers also
+test individual mesh bounds. Scene registration determines which owners enter
+the query. The recovered [projection and generation](../lib/src/format/decal.rs)
+implement the static shader's geometry operation; receiver registration and the
+final material draw remain separate integration requirements.
+
 ## Loading and activation
 
 A ROOM contains definitions, not a snapshot of all currently active objects.

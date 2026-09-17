@@ -30,9 +30,16 @@ pub enum IntegerOperation {
         invert: bool,
     },
     Add {
-        /// Both negate bits encode IADD.PO, not two independent negations.
+        /// Without .X, both negate bits encode IADD.PO, not two negations.
+        /// With .X, individual bits complement operands instead of negating.
         negate: [bool; 2],
         saturate: bool,
+    },
+    ScaledAdd {
+        /// Shift A left before the addition, truncating to 32 bits.
+        shift: u8,
+        /// Both bits encode ISCADD.PO (add one).
+        negate: [bool; 2],
     },
     Logic {
         operation: LogicOperation,
@@ -111,8 +118,18 @@ impl IntegerInstruction {
         let long = word & 0xfc00000000000000;
         // IADD32I bit56 is negate, but bit57 distinguishes FMUL32I.
         let long_add = word & 0xfe00000000000000 == 0x1c00000000000000;
-        let (family, form) = if long_add || long == 0x0400000000000000 {
-            (if long_add { 0 } else { 1 }, 3)
+        let long_scaled = long == 0x1400000000000000;
+        let (family, form) = if long_add || long_scaled || long == 0x0400000000000000 {
+            (
+                if long_add {
+                    0
+                } else if long_scaled {
+                    4
+                } else {
+                    1
+                },
+                3,
+            )
         } else {
             let (base, form) = if word >> 60 == 5 {
                 (normal, 0)
@@ -129,6 +146,7 @@ impl IntegerInstruction {
                     0x5c40000000000000 => 1,
                     0x5c48000000000000 => 2,
                     0x5c28000000000000 => 3,
+                    0x5c18000000000000 => 4,
                     _ => return None,
                 },
                 form,
@@ -154,17 +172,18 @@ impl IntegerInstruction {
             _ => f.immediate32(),
         };
         let write_condition_code = f.bit(if form == 3 { 52 } else { 47 });
-        let extended = f.bit(if form == 3 {
-            if family == 0 {
-                53
+        let extended = family != 4
+            && f.bit(if form == 3 {
+                if family == 0 {
+                    53
+                } else {
+                    57
+                }
+            } else if family == 3 {
+                44
             } else {
-                57
-            }
-        } else if family == 3 {
-            44
-        } else {
-            43
-        });
+                43
+            });
         let operation = match family {
             0 => IntegerOperation::Add {
                 negate: [f.bit(if form == 3 { 56 } else { 49 }), form != 3 && f.bit(48)],
@@ -183,6 +202,10 @@ impl IntegerInstruction {
                 ],
                 predicate_mode: if form == 3 { 0 } else { f.get(44, 2) as u8 },
                 predicate_destination: if form == 3 { 7 } else { f.get(48, 3) as u8 },
+            },
+            4 => IntegerOperation::ScaledAdd {
+                shift: f.get(if form == 3 { 53 } else { 39 }, 5) as u8,
+                negate: [form != 3 && f.bit(49), form != 3 && f.bit(48)],
             },
             _ => IntegerOperation::Shift {
                 right: family == 3,
@@ -208,6 +231,26 @@ impl Instruction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scaled_add_forms_match_nvdisasm_sm53() {
+        for (word, shift, source) in [
+            (0x4c18820014470606, 4, ValueSource::Constant { buffer: 0, byte_offset: 0x510 }),
+            (0x5c188f8000270100, 31, ValueSource::Register(2)),
+            (0x17f8000000170100, 31, ValueSource::Immediate(0x80000001)),
+        ] {
+            let i = IntegerInstruction::decode(word).unwrap();
+            assert_eq!(i.operation, IntegerOperation::ScaledAdd { shift, negate: [false; 2] });
+            assert_eq!(i.sources[1], source);
+            assert!(i.write_condition_code);
+            assert!(!i.extended); // Scale bits overlap IADD's extended bit.
+            assert_eq!(i.unrecognized_bits, 0);
+        }
+        let i = IntegerInstruction::decode(0x381802fffff70100).unwrap();
+        assert_eq!(i.sources[1], ValueSource::Immediate(0x7ffff));
+        assert_eq!(i.operation, IntegerOperation::ScaledAdd { shift: 5, negate: [false; 2] });
+        assert_eq!(i.unrecognized_bits, 0);
+    }
 
     #[test]
     fn integer_add_does_not_claim_float_multiply_immediate() {

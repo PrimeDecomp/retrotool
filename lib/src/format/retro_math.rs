@@ -31,6 +31,16 @@ pub fn sqrt_f(value: f32) -> f32 {
         return f32::NAN;
     }
     let input = value.max(f32::from_bits(0x0554_ad2e));
+    value * reciprocal_sqrt(input)
+}
+
+/// Two ARM reciprocal-square-root refinement steps, shared by native vector math.
+fn reciprocal_sqrt(input: f32) -> f32 {
+    // FRSQRTE(+inf) is zero; FRSQRTS(+inf, 0) returns 1.5, retaining zero
+    // through both refinements. Finite vector components can overflow the dot.
+    if input == f32::INFINITY {
+        return 0.0;
+    }
     let bits = input.to_bits();
     let exponent = (bits >> 23) & 255;
     let index = ((bits >> 16) & 127) + if exponent & 1 == 0 { 128 } else { 0 };
@@ -44,7 +54,41 @@ pub fn sqrt_f(value: f32) -> f32 {
         let correction = ((3.0f64 - f64::from(input) * f64::from(square)) * 0.5) as f32;
         estimate *= correction;
     }
-    value * estimate
+    estimate
+}
+
+/// CVector3f::AsNormalizedOrZero (710006b6b8). Preserve its finite/length checks
+/// and SIMD reduction order, which differ from a generic vector normalize.
+pub fn normalized_or_zero(value: [f32; 3]) -> [f32; 3] {
+    let [x, y, z] = value;
+    if !value.iter().all(|v| v.is_finite()) || (x * x + y * y) + z * z < 9.999_999_4e-29 {
+        return [0.0; 3];
+    }
+    let scale = reciprocal_sqrt((x * x + z * z) + (y * y + 0.0));
+    value.map(|v| v * scale)
+}
+
+/// CMath::FastCosR (7100069280), used for decal angle thresholds. This is the
+/// engine's polynomial and reduction order, not the host cosine function.
+pub fn fast_cos_r(mut angle: f32) -> f32 {
+    if angle.abs() > std::f32::consts::PI {
+        let turns = (angle * (std::f32::consts::FRAC_1_PI * 0.5)) as i32;
+        let reduced = angle + turns as f32 * -std::f32::consts::TAU;
+        angle = if reduced >= std::f32::consts::PI {
+            reduced - std::f32::consts::TAU
+        } else if reduced <= -std::f32::consts::PI {
+            reduced + std::f32::consts::TAU
+        } else {
+            reduced
+        };
+    }
+    let square = angle * angle;
+    let cube = square * square * square;
+    square * -0.499_980_03
+        + 1.0
+        + square * square * 0.041_620_344
+        + cube * -0.001_363_610_3
+        + square * cube * 2.016_943_5e-5
 }
 
 /// CRandom16::RangeF71000b9f90. The caller owns the actual 32-bit stream state.
@@ -59,6 +103,39 @@ pub fn random_range_f(state: &mut u32, min: f32, max: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_decal_angle_thresholds_preserve_polynomial_and_reduction() {
+        // Results captured by executing CMath::FastCosR in the original ARM64 image.
+        for (input, expected) in [
+            (0x3f49_0fdb, 0x3f35_04f2),
+            (0xc0a5_dc67, 0x3ee8_3913),
+            (0x4073_184c, 0xbf4a_c2d0),
+            (0xc0a4_a250, 0x3ed6_8f98),
+            (0x40a1_6b8d, 0x3ea6_de39),
+            (0x40be_7004, 0x3f72_0518),
+        ] {
+            assert_eq!(fast_cos_r(f32::from_bits(input)).to_bits(), expected, "angle {input:x}");
+        }
+    }
+
+    #[test]
+    fn original_vector_normalization_preserves_rounding_and_degenerate_cases() {
+        // Direct results from CVector3f::AsNormalizedOrZero in the ARM64 image.
+        for (input, expected) in [
+            ([0x3f80_0000, 0x4000_0000, 0x4040_0000], [0x3e88_d677, 0x3f08_d677, 0x3f4d_41b2]),
+            ([0xc040_0000, 0x4080_0000, 0xc000_0000], [0xbf0e_9d30, 0x3f3e_26eb, 0xbebe_26eb]),
+            ([0x2690_1d7d, 0, 0], [0, 0, 0]),
+            ([0x2834_24dc, 0, 0], [0x3f80_0001, 0, 0]),
+            ([0x7149_f2ca, 0xf1c9_f2ca, 0x7217_7617], [0, 0x8000_0000, 0]),
+        ] {
+            assert_eq!(normalized_or_zero(input.map(f32::from_bits)).map(f32::to_bits), expected);
+        }
+        for input in [[0.0; 3], [f32::INFINITY, 0.0, 0.0], [f32::NAN, 1.0, 2.0]] {
+            assert_eq!(normalized_or_zero(input).map(f32::to_bits), [0; 3]);
+        }
+    }
+
     #[test]
     fn original_math_preserves_estimate_rounding_and_rng_upper_endpoint() {
         for (input, expected) in [

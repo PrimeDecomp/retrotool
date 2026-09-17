@@ -1,4 +1,4 @@
-//! Maxwell TEXS/TLDS operands, from devkitPro/uam's GM107 encoder (commit
+//! Maxwell TEX/TEXS/TLDS operands, from devkitPro/uam's GM107 encoder (commit
 //! 5a5afc2bae8b55409ab36ba45be63fcb73f68993). Mesa NAK sm50.rs provides the
 //! corresponding ordinary texture instruction family; it does not emit TEXS/TLDS.
 //! Other instruction families remain raw, including half-precision result forms.
@@ -7,7 +7,10 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::maxwell::Instruction;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+mod contiguous;
+pub use contiguous::Tex;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub enum TextureDimension {
     D1,
     D2,
@@ -38,7 +41,7 @@ pub struct TldsMode {
     pub multisample: bool,
 }
 
-/// Register words consumed by the split texture instruction. uam's
+/// Register words consumed by a texture instruction. uam's
 /// NVC0LoweringPass::handleTEX orders layer/coordinates/LOD/comparison/offset,
 /// and RegAlloc::handleScalarTexGM107 condenses that list into two groups.
 /// TLDS array mode uniquely keeps the layer alone in the first group.
@@ -281,6 +284,8 @@ fn component_registers(mask: u8, destinations: [u8; 2]) -> Option<[Option<u8>; 4
 }
 
 impl Instruction {
+    pub fn texture_sample_contiguous(&self) -> Option<Tex> { Tex::decode(self.word) }
+
     pub fn texture_sample(&self) -> Option<Texs> { Texs::decode(self.word) }
 
     pub fn texture_load(&self) -> Option<Tlds> { Tlds::decode(self.word) }

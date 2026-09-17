@@ -216,6 +216,7 @@ fn extract(args: ExtractArgs) -> Result<()> {
                                 "texture_operands":i.texture_sample().and_then(|v|v.operand_registers())
                                     .or_else(||i.texture_load().and_then(|v|v.operand_registers())),
                                 "constant_load":i.constant_load(),
+                                "global_load":i.global_load(),
                                 "alu":i.alu(),
                                 "attribute":i.attribute(),
                                 "float_comparison":i.float_comparison(),

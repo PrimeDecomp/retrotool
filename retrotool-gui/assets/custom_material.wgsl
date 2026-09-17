@@ -1,20 +1,21 @@
-#import "mpr_layered.wgsl"
-#import "mpr_lighting.wgsl"
-
-#import bevy_pbr::mesh_view_bindings
-#import bevy_pbr::mesh_bindings
-
-#import bevy_pbr::utils
-#import bevy_pbr::clustered_forward
-#import bevy_pbr::lighting
-#import bevy_pbr::pbr_ambient
-
-#ifdef TONEMAP_IN_SHADER
-#import bevy_core_pipeline::tonemapping
+#import "mpr_layered.wgsl"::{mpr_vertex_frame_to_world, mpr_vertex_tangent, mpr_vertex_color, mpr_face_scale, mpr_surface_channels, mpr_surface_alpha, mpr_layer_weight, mpr_layer_normal, mpr_single_normal}
+#import "mpr_lighting.wgsl"::{mpr_combine_direct, mpr_direct_light}
+#import bevy_pbr::{
+    mesh_view_bindings::{view, lights, clustered_lights},
+    mesh_view_types::POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE,
+    mesh_functions::{get_world_from_local, mesh_position_local_to_clip, mesh_position_local_to_world, mesh_normal_local_to_world, mesh_tangent_local_to_world},
+    clustered_forward::{view_fragment_cluster_index, unpack_clusterable_object_index_ranges, get_clusterable_object_id},
+    lighting::{LightingInput, LayerLightingInput, getDistanceAttenuation, perceptualRoughnessToRoughness, F_AB, point_light, spot_light, directional_light},
+    ambient::ambient_light,
+}
+#ifdef SKINNED
+#import bevy_pbr::skinning::{skin_model, skin_normals}
 #endif
-
+#ifdef TONEMAP_IN_SHADER
+#import bevy_core_pipeline::tonemapping::{tone_mapping, screen_space_dither}
+#endif
 #ifdef ENVIRONMENT_MAP
-#import bevy_pbr::environment_map
+#import bevy_pbr::environment_map::environment_map_light
 #endif
 
 struct CustomMaterial {
@@ -44,53 +45,51 @@ struct CustomMaterial {
     layer_scales: vec4<f32>,
     light_scale: f32,
 };
-@group(1) @binding(0)
+@group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> material: CustomMaterial;
-@group(1) @binding(1)
+@group(#{MATERIAL_BIND_GROUP}) @binding(1)
 var base_color_texture_0: texture_2d<f32>;
-@group(1) @binding(2)
+@group(#{MATERIAL_BIND_GROUP}) @binding(2)
 var base_color_sampler_0: sampler;
-@group(1) @binding(3)
+@group(#{MATERIAL_BIND_GROUP}) @binding(3)
 var base_color_texture_1: texture_2d<f32>;
-@group(1) @binding(4)
+@group(#{MATERIAL_BIND_GROUP}) @binding(4)
 var base_color_sampler_1: sampler;
-@group(1) @binding(5)
+@group(#{MATERIAL_BIND_GROUP}) @binding(5)
 var base_color_texture_2: texture_2d<f32>;
-@group(1) @binding(6)
+@group(#{MATERIAL_BIND_GROUP}) @binding(6)
 var base_color_sampler_2: sampler;
-@group(1) @binding(7)
+@group(#{MATERIAL_BIND_GROUP}) @binding(7)
 var normal_map_texture_0: texture_2d<f32>;
-@group(1) @binding(8)
+@group(#{MATERIAL_BIND_GROUP}) @binding(8)
 var normal_map_sampler_0: sampler;
-@group(1) @binding(9)
+@group(#{MATERIAL_BIND_GROUP}) @binding(9)
 var normal_map_texture_1: texture_2d<f32>;
-@group(1) @binding(10)
+@group(#{MATERIAL_BIND_GROUP}) @binding(10)
 var normal_map_sampler_1: sampler;
-@group(1) @binding(11)
+@group(#{MATERIAL_BIND_GROUP}) @binding(11)
 var normal_map_texture_2: texture_2d<f32>;
-@group(1) @binding(12)
+@group(#{MATERIAL_BIND_GROUP}) @binding(12)
 var normal_map_sampler_2: sampler;
-@group(1) @binding(13)
+@group(#{MATERIAL_BIND_GROUP}) @binding(13)
 var metallic_map_texture_0: texture_2d<f32>;
-@group(1) @binding(14)
+@group(#{MATERIAL_BIND_GROUP}) @binding(14)
 var metallic_map_sampler_0: sampler;
-@group(1) @binding(15)
+@group(#{MATERIAL_BIND_GROUP}) @binding(15)
 var metallic_map_texture_1: texture_2d<f32>;
-@group(1) @binding(16)
+@group(#{MATERIAL_BIND_GROUP}) @binding(16)
 var metallic_map_sampler_1: sampler;
-@group(1) @binding(17)
+@group(#{MATERIAL_BIND_GROUP}) @binding(17)
 var metallic_map_texture_2: texture_2d<f32>;
-@group(1) @binding(18)
+@group(#{MATERIAL_BIND_GROUP}) @binding(18)
 var metallic_map_sampler_2: sampler;
-@group(1) @binding(19)
+@group(#{MATERIAL_BIND_GROUP}) @binding(19)
 var emissive_texture: texture_2d<f32>;
-@group(1) @binding(20)
+@group(#{MATERIAL_BIND_GROUP}) @binding(20)
 var emissive_sampler: sampler;
 
-// NOTE: Bindings must come before functions that use them!
-#import bevy_pbr::mesh_functions
-
 struct VertexInput {
+    @builtin(instance_index) instance_index: u32,
 #ifdef VERTEX_POSITIONS
     @location(0) position: vec3<f32>,
 #endif
@@ -168,14 +167,14 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
 #endif
 #ifdef SKINNED
-    var model = skin_model(in.joint_indices, in.joint_weights);
+    var model = skin_model(in.joint_indices, in.joint_weights, in.instance_index);
 #else
-    var model = mesh.model;
+    var model = get_world_from_local(in.instance_index);
 #endif
     out.position = mesh_position_local_to_clip(model, position);
     out.world_position = mesh_position_local_to_world(model, position);
 #ifdef MPR_RECOVERED_SURFACE
-    let mpr_frame = mpr_vertex_frame_to_world(model, view.view, view.inverse_view);
+    let mpr_frame = mpr_vertex_frame_to_world(model, view.view_from_world, view.world_from_view);
 #endif
 #ifdef VERTEX_NORMALS
 #ifdef SKINNED
@@ -184,7 +183,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
 #ifdef MPR_RECOVERED_SURFACE
     out.world_normal = mpr_frame * in.normal;
 #else
-    out.world_normal = mesh_normal_local_to_world(in.normal);
+    out.world_normal = mesh_normal_local_to_world(in.normal, in.instance_index);
 #endif
 #endif
 #endif
@@ -204,18 +203,18 @@ fn vertex(in: VertexInput) -> VertexOutput {
 #ifdef MPR_RECOVERED_SURFACE
     out.world_tangent_0 = mpr_vertex_tangent(mpr_frame, model, in.tangent_0);
 #else
-    out.world_tangent_0 = mesh_tangent_local_to_world(mesh.model, in.tangent_0);
+    out.world_tangent_0 = mesh_tangent_local_to_world(model, in.tangent_0, in.instance_index);
 #endif
 #endif
 #ifdef VERTEX_TANGENTS_1
 #ifdef MPR_RECOVERED_SURFACE
     out.world_tangent_1 = mpr_vertex_tangent(mpr_frame, model, in.tangent_1);
 #else
-    out.world_tangent_1 = mesh_tangent_local_to_world(mesh.model, in.tangent_1);
+    out.world_tangent_1 = mesh_tangent_local_to_world(model, in.tangent_1, in.instance_index);
 #endif
 #endif
 #ifdef VERTEX_TANGENTS_2
-    out.world_tangent_2 = mesh_tangent_local_to_world(mesh.model, in.tangent_2);
+    out.world_tangent_2 = mesh_tangent_local_to_world(model, in.tangent_2, in.instance_index);
 #endif
 #ifdef VERTEX_COLORS
     out.color = in.color;
@@ -442,7 +441,7 @@ fn calculate_view(
     var V: vec3<f32>;
     if (is_orthographic) {
         // Orthographic view vector
-        V = normalize(vec3<f32>(view.view_proj[0].z, view.view_proj[1].z, view.view_proj[2].z));
+        V = normalize(vec3<f32>(view.clip_from_world[0].z, view.clip_from_world[1].z, view.clip_from_world[2].z));
     } else {
         // Only valid for a perpective projection
         V = normalize(view.world_position.xyz - world_position.xyz);
@@ -454,7 +453,7 @@ fn calculate_view(
 // local-light BRDF for these preview lights, with CLight's default roughness0.
 // Runtime MPR records instead use mpr_local_light's cubic/linear cone falloff.
 fn mpr_preview_local_light(in: PbrInput, light_id: u32, spot: bool) -> vec3<f32> {
-    let light = point_lights.data[light_id];
+    let light = clustered_lights.data[light_id];
     let delta = light.position_radius.xyz - in.world_position.xyz;
     let direction = normalize(delta);
     var attenuation = getDistanceAttenuation(dot(delta, delta), light.color_inverse_square_range.w);
@@ -509,46 +508,62 @@ fn pbr(
     let R = reflect(-in.V, in.N);
 
     let f_ab = F_AB(perceptual_roughness, NdotV);
+    var lighting: LightingInput;
+    lighting.layers[0] = LayerLightingInput(in.N, R, NdotV, perceptual_roughness, roughness);
+    lighting.P = in.world_position.xyz;
+    lighting.V = in.V;
+    lighting.diffuse_color = diffuse_color;
+    lighting.F_ab = f_ab;
+#ifdef MPR_RECOVERED_SURFACE
+    // Recovered surfaces supply F0 and diffuse independently of Bevy's metalness model.
+    lighting.F0_dielectric = F0;
+    lighting.F0_metallic = F0;
+    lighting.metallic = 0.0;
+#else
+    lighting.F0_dielectric = vec3(0.16 * reflectance * reflectance);
+    lighting.F0_metallic = output_color.rgb;
+    lighting.metallic = metallic;
+#endif
 
     var direct_light: vec3<f32> = vec3<f32>(0.0);
 
     let view_z = dot(vec4<f32>(
-        view.inverse_view[0].z,
-        view.inverse_view[1].z,
-        view.inverse_view[2].z,
-        view.inverse_view[3].z
+        view.world_from_view[0].z,
+        view.world_from_view[1].z,
+        view.world_from_view[2].z,
+        view.world_from_view[3].z
     ), in.world_position);
-    let cluster_index = fragment_cluster_index(in.frag_coord.xy, view_z, in.is_orthographic);
-    let offset_and_counts = unpack_offset_and_counts(cluster_index);
+    let cluster_index = view_fragment_cluster_index(in.frag_coord.xy, view_z, in.is_orthographic);
+    var ranges = unpack_clusterable_object_index_ranges(cluster_index);
 
     // Point lights (direct)
-    for (var i: u32 = offset_and_counts[0]; i < offset_and_counts[0] + offset_and_counts[1]; i = i + 1u) {
-        let light_id = get_light_id(i);
+    for (var i: u32 = ranges.first_point_light_index_offset; i < ranges.first_spot_light_index_offset; i = i + 1u) {
+        let light_id = get_clusterable_object_id(i);
         var shadow: f32 = 1.0;
 //        if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-//                && (point_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+//                && (clustered_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
 //            shadow = fetch_point_shadow(light_id, in.world_position, in.world_normal);
 //        }
 #ifdef MPR_RECOVERED_SURFACE
         let light_contrib = mpr_preview_local_light(in, light_id, false);
 #else
-        let light_contrib = point_light(in.world_position.xyz, light_id, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+        let light_contrib = point_light(light_id, &lighting, true, false);
 #endif
         direct_light += light_contrib * shadow;
     }
 
     // Spot lights (direct)
-    for (var i: u32 = offset_and_counts[0] + offset_and_counts[1]; i < offset_and_counts[0] + offset_and_counts[1] + offset_and_counts[2]; i = i + 1u) {
-        let light_id = get_light_id(i);
+    for (var i: u32 = ranges.first_spot_light_index_offset; i < ranges.first_reflection_probe_index_offset; i = i + 1u) {
+        let light_id = get_clusterable_object_id(i);
         var shadow: f32 = 1.0;
 //        if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-//                && (point_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+//                && (clustered_lights.data[light_id].flags & POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
 //            shadow = fetch_spot_shadow(light_id, in.world_position, in.world_normal);
 //        }
 #ifdef MPR_RECOVERED_SURFACE
         let light_contrib = mpr_preview_local_light(in, light_id, true);
 #else
-        let light_contrib = spot_light(in.world_position.xyz, light_id, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+        let light_contrib = spot_light(light_id, &lighting, true);
 #endif
         direct_light += light_contrib * shadow;
     }
@@ -567,7 +582,7 @@ fn pbr(
             preview_light.direction_to_light.xyz, perceptual_roughness, F0,
             preview_light.color.rgb, 0.0), diffuse_color);
 #else
-        var light_contrib = directional_light(i, roughness, NdotV, in.N, in.V, R, F0, f_ab, diffuse_color);
+        var light_contrib = directional_light(i, &lighting, true);
 #endif
 //#ifdef DIRECTIONAL_LIGHT_SHADOW_MAP_DEBUG_CASCADES
 //        light_contrib = cascade_debug_visualization(light_contrib, i, view_z);
@@ -576,11 +591,11 @@ fn pbr(
     }
 
     // Ambient light (indirect)
-    var indirect_light = ambient_light(in.world_position, in.N, in.V, NdotV, diffuse_color, F0, perceptual_roughness, occlusion);
+    var indirect_light = ambient_light(in.world_position, in.N, in.V, NdotV, diffuse_color, F0, perceptual_roughness, vec3(occlusion));
 
     // Environment map light (indirect)
 #ifdef ENVIRONMENT_MAP
-    let environment_light = environment_map_light(perceptual_roughness, roughness, diffuse_color, NdotV, f_ab, in.N, R, F0);
+    let environment_light = environment_map_light(&lighting, &ranges, false);
     indirect_light += (environment_light.diffuse * occlusion) + environment_light.specular;
 #endif
 
@@ -591,7 +606,8 @@ fn pbr(
     let emissive_light = emissive.rgb * output_color.a;
 #endif
 
-    // Total light
+    // Preview lights use normalized values (ambient 0.05, environment 1.0).
+    // Do not apply Bevy's physical-camera exposure to this legacy preview.
     output_color = vec4<f32>(
         direct_light + indirect_light + emissive_light,
         output_color.a
@@ -629,7 +645,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loc
 #ifdef VERTEX_NORMALS
     pbr_input.world_normal = in.world_normal;
 #endif
-    pbr_input.is_orthographic = view.projection[3].w == 1.0;
+    pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
 
 #ifdef MPR_RECOVERED_SURFACE
     pbr_input.material.emissive = material.emissive_color + material.emissive_unmasked_color;
@@ -683,7 +699,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loc
 
     var output_color = pbr(pbr_input);
 #ifdef TONEMAP_IN_SHADER
-    output_color = tone_mapping(output_color);
+    output_color = tone_mapping(output_color, view.color_grading);
 #endif
 #ifdef DEBAND_DITHER
     var output_rgb = output_color.rgb;

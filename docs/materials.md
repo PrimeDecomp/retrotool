@@ -15,13 +15,36 @@ model draw path puts caller data before per-material data, then shared model
 data. Flags and presence masks combine across providers. Presence can therefore
 select a feature even when the eventual typed lookup returns null.
 
-A `BKLT` trait can create a shared `BKLB` height-range provider for all model
-materials, subject to existing provider precedence.
+A `BKLT` backlighting trait creates a shared `BKLB` height-range provider for
+all model materials. It uses the model's native Y bounds and follows serialized
+shared values in provider order; it is not another record in the file.
+`BKGL` comes from the render pass: back/top backlight intensities followed by
+two zeros. The UI pass uses the engine defaults `(4, 2)`; world passes can
+modulate them through backlight hints. This is separate from baked probe lighting.
+
+`LODP` is runtime view data: the **culling camera's world position**, followed
+by `1`. It is not a vector of authored LOD thresholds. The render graph constructs
+it in `NSceneRenderGraphs::SContext` (`0x71001af4cc`); using a fixed value while
+moving the camera changes distance-dependent shader behavior.
 
 `LoadMaterialCache` (`0x7100348fe8`) and `SetupMaterialForRenderMesh`
 (`0x71001fc014`) establish these relationships. See
 [model parsing](../lib/src/format/cmdl.rs) and
 [instance selection](../lib/src/format/material_predicates.rs) for the data types.
+
+Standalone **MATI** resources supply the same kinds of instance values for
+consumers such as decals, without a model material cache. Their implementation
+and MTRL GUIDs appear in the reverse order from a model's. Cull and blend values
+are requests; unset values receive defaults from the consumer. For geometry
+decals, all six checked materials request the dual-source blend described below.
+
+A nil MATI texture reference is **a present black texture**, not missing data.
+Its property tag selects a 2D, array, cube or volume fallback; the native loader
+uses a raw texture binding and ignores serialized usage overrides. Non-nil
+references instead use the actual TXTR type and apply usage overrides. This
+distinction affects both feature selection and binding. See the
+[MATI parser](../lib/src/format/material/instance.rs), traced from the native
+factory (`0x71001fdd20`).
 
 ## Archive roles
 
@@ -92,6 +115,14 @@ permutation overrides. Each merge replaces only enabled fields. Overrides apply
 in file order; an empty condition applies unconditionally. Blend state is
 replaced as a whole, while its target mask controls which live targets change.
 Explicit factors and equations are authoritative even when a preset is named.
+
+Some transparent materials use **dual-source blending**: two pixel color exports
+feed one framebuffer attachment. Varia's glass uses preset 10, whose RGB equation
+is `source0.rgb + destination.rgb * (1 - source1.rgb)`; alpha instead uses
+`source0.a + destination.a * (1 - source0.a)`. The secondary RGB permits different
+background transmission per channel. Treating it as another attachment, or using
+ordinary alpha blending, loses that behavior. The factors are established by
+`SetBlendMode` (`0x71001addf0`) and the preset constructor (`0x71000ef984`).
 
 Mesh classes, two-sided flags and transform handedness also affect a draw.
 Shader alpha alone does not determine transparency. Mirroring must change the

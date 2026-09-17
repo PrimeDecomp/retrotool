@@ -199,6 +199,238 @@ mod tests {
     use super::*;
 
     #[test]
+    fn original_fragment_prologue_resolves_the_first_texture_request() {
+        use remax::{
+            maxwell::MaxwellCode,
+            program::{
+                interpolation::{Attribute, OffsetModel, Plane, Planes},
+                texture, FloatModel, Inputs, Interpolant, InterpolationLocation, InterpolationMode,
+                InterpretOptions, Program, Register, Signature, SpecialFunctionModel, Stage, Value,
+            },
+            resources::{ConstantBank, ConstantMemory},
+        };
+        // Startup SNVN source 0: position -> pixel cell -> PIXLD.MY_INDEX ->
+        // LDC.U8 c0[0x620 + index] -> SHL/SHL/XMAD.PSL.CLO -> offset IPA/RCP -> TEXS.
+        // The table/packing is checked against NVN's provider. The interpolation
+        // and texture results are supplied explicitly; this does not emulate
+        // the rasterizer or texture filtering.
+        let words = [
+            0xe003ff874ff7ff02u64,
+            0xe003ff870ff7ff01,
+            0x5cb0108000270a02,
+            0x5cb0108000170a01,
+            0x4c47000018f70200,
+            0x4c47000018e70103,
+            0x4c48008018e70004,
+            0xefe8e0028007ff00,
+            0x5c10000000470303,
+            0x4c47000018c70000,
+            0x4c48008018d70303,
+            0x5c10000000370005,
+            0xef90000062070505,
+            0x3848008000470500,
+            0x3848008000870501,
+            0x3604009000170005,
+            0xe0238287cff7ff0a,
+            0x5080000000470a0b,
+            0xe063828800b7ff08,
+            0xe063828840b7ff03,
+            0xd820008ff0370808,
+            0xe30000000007000f,
+        ];
+        let code = words
+            .chunks(3)
+            .flat_map(|g| {
+                [0x001f8000fc0007e0, g[0], *g.get(1).unwrap_or(&0), *g.get(2).unwrap_or(&0)]
+            })
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>();
+        let program = Program::lift(MaxwellCode::parse(&code).unwrap(), &Signature {
+            indexed_attributes: vec![],
+            stage: Stage::Fragment,
+            outputs: [5, 10, 11, 8, 3].map(Register::Gpr).to_vec(),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut cases = 0;
+        for samples in [1, 2, 4, 8, 16] {
+            for grid in [false, true] {
+                let layout = NvnSampleState {
+                    samples,
+                    raster_samples: 0,
+                    enabled: true,
+                    grid,
+                    custom_locations: grid
+                        .then(|| std::array::from_fn(|i| (i as u8).wrapping_mul(17))),
+                }
+                .resolve()
+                .unwrap();
+                let mut bank = vec![0; 0x640];
+                bank[0x620..0x640].copy_from_slice(&layout.constants.to_bytes());
+                let mut known = vec![false; bank.len()];
+                known[0x620..0x640].fill(true);
+                let memory = ConstantMemory::from_banks(&[ConstantBank {
+                    bank: 0,
+                    bytes: &bank,
+                    known: Some(&known),
+                }])
+                .unwrap();
+                for pixel in [[0, 0], [1, 1], [2, 3], [123, 456]] {
+                    for sample in 0..u32::from(samples) {
+                        let packed =
+                            layout.constants.packed_interpolation_offset(pixel, sample).unwrap();
+                        let mut inputs = Inputs {
+                            constants: memory.clone(),
+                            sample_index: Some(sample),
+                            interpolants: [(0x70, pixel[0]), (0x74, pixel[1])]
+                                .into_iter()
+                                .map(|(byte_offset, coordinate)| {
+                                    (
+                                        Interpolant {
+                                            byte_offset,
+                                            mode: InterpolationMode::Pass,
+                                            location: InterpolationLocation::Default,
+                                        },
+                                        (coordinate as f32 + 0.5).to_bits(),
+                                    )
+                                })
+                                .collect(),
+                            ..Default::default()
+                        };
+                        inputs.interpolants.insert(
+                            Interpolant {
+                                byte_offset: 0x7c,
+                                mode: InterpolationMode::Pass,
+                                location: InterpolationLocation::Offset(packed),
+                            },
+                            0.25f32.to_bits(),
+                        );
+                        // A supplied screen-linear 1/W of 1/4 yields W=4.
+                        // Attribute/W numerators 1/8 and 3/16 produce UV=(1/2,3/4).
+                        for (byte_offset, numerator) in [(0x80, 0.125f32), (0x84, 0.1875)] {
+                            inputs.interpolants.insert(
+                                Interpolant {
+                                    byte_offset,
+                                    mode: InterpolationMode::Perspective,
+                                    location: InterpolationLocation::Offset(packed),
+                                },
+                                numerator.to_bits(),
+                            );
+                        }
+                        let mut texture_reads = 0;
+                        let result = program
+                            .interpret_with_textures(
+                                &inputs,
+                                InterpretOptions {
+                                    step_budget: 1000,
+                                    float_model: FloatModel::SoftwareIeee,
+                                    special_functions: SpecialFunctionModel::HostF32,
+                                },
+                                &mut |request: &texture::Request| {
+                                    assert_eq!(*request, texture::Request {
+                                        descriptor_word_offset: 8,
+                                        stage: Stage::Fragment,
+                                        pc: 0xd8,
+                                        occurrence: 0,
+                                        skip_helpers: false,
+                                        operation: texture::Operation::Sample {
+                                            coordinates: texture::Coordinates::D2([
+                                                0.5f32.to_bits(),
+                                                0.75f32.to_bits()
+                                            ]),
+                                            level: texture::SampleLevel::Implicit,
+                                            comparison: None,
+                                        },
+                                    });
+                                    texture_reads += 1;
+                                    Ok(texture::Response::Texel([0x7fc12345, 1, 2, 3]))
+                                },
+                            )
+                            .unwrap()
+                            .into_outputs()
+                            .expect("live invocation");
+                        assert_eq!(
+                            result,
+                            [
+                                packed,
+                                0.25f32.to_bits(),
+                                4.0f32.to_bits(),
+                                0x7fc12345,
+                                0.75f32.to_bits()
+                            ]
+                            .map(Value::Word),
+                            "samples={samples} grid={grid} pixel={pixel:?} sample={sample}"
+                        );
+                        assert_eq!(texture_reads, 1);
+                        // Run the same native prologue using affine inputs.
+                        // The NVN adapter supplies sample locations; remax must
+                        // decode the generated offset and interpolate before RCP/IPA.
+                        let delta = layout
+                            .constants
+                            .offset_sixteenths(pixel, sample)
+                            .unwrap()
+                            .map(|v| f32::from(v) / 16.);
+                        assert_eq!(OffsetModel::SignedSixteenths.decode(packed), delta);
+                        inputs.interpolants.retain(|request, _| {
+                            !matches!(request.location, InterpolationLocation::Offset(_))
+                        });
+                        inputs.offset_interpolation = Some(
+                            Planes::new(OffsetModel::SignedSixteenths, &[
+                                (
+                                    Attribute { byte_offset: 0x7c, mode: InterpolationMode::Pass },
+                                    Plane { center: 0.25, dx: 0., dy: 0. },
+                                ),
+                                (
+                                    Attribute {
+                                        byte_offset: 0x80,
+                                        mode: InterpolationMode::Perspective,
+                                    },
+                                    Plane { center: 0.125, dx: 0.0625, dy: 0. },
+                                ),
+                                (
+                                    Attribute {
+                                        byte_offset: 0x84,
+                                        mode: InterpolationMode::Perspective,
+                                    },
+                                    Plane { center: 0.1875, dx: 0., dy: 0.125 },
+                                ),
+                            ])
+                            .unwrap(),
+                        );
+                        let expected = [0.5 + delta[0] * 0.25, 0.75 + delta[1] * 0.5];
+                        let result = program
+                            .interpret_with_textures(
+                                &inputs,
+                                InterpretOptions {
+                                    step_budget: 1000,
+                                    float_model: FloatModel::SoftwareIeee,
+                                    special_functions: SpecialFunctionModel::HostF32,
+                                },
+                                &mut |request: &texture::Request| {
+                                    let texture::Operation::Sample {
+                                        coordinates: texture::Coordinates::D2(actual),
+                                        ..
+                                    } = request.operation
+                                    else {
+                                        panic!()
+                                    };
+                                    assert_eq!(actual, expected.map(f32::to_bits));
+                                    Ok(texture::Response::Texel([0x7fc12345, 1, 2, 3]))
+                                },
+                            )
+                            .unwrap()
+                            .into_outputs()
+                            .expect("live invocation");
+                        assert_eq!(result[4], Value::Word(expected[1].to_bits()));
+                        cases += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 248);
+    }
+
+    #[test]
     fn original_game_quarter_pixel_pattern() {
         let mut positions = [0x88; 16];
         positions[..4].copy_from_slice(&[0x44, 0x4c, 0xc4, 0xcc]);

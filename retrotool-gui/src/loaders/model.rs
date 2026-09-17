@@ -1,20 +1,19 @@
-use std::path::PathBuf;
+use std::collections::{hash_map::Entry, HashMap};
 
 use anyhow::{ensure, Context, Error, Result};
 use bevy::{
-    asset::{AssetLoader, AssetPath, BoxedFuture, LoadContext, LoadState, LoadedAsset},
+    asset::{io::Reader, AssetLoader, AssetPath, LoadContext, LoadState},
+    image::ImageSampler,
     prelude::*,
-    render::texture::ImageSampler,
-    utils::{hashbrown::hash_map::Entry, HashMap},
 };
 use retrolib::format::{
     cmdl::{
         CMaterialDataInner, CMaterialTextureTokenData, EMaterialDataId, ModelData, SMaterialChunk,
-        K_FORM_CMDL,
     },
     foot::{locate_asset_id, locate_meta},
     material_features::GraphicsState,
     material_predicates::MaterialSelectionState,
+    rfrm::FormDescriptor,
     texture_sampler::TextureSamplerParams,
 };
 use uuid::Uuid;
@@ -23,6 +22,7 @@ use zerocopy::LittleEndian;
 use crate::{
     loaders::{
         material::MaterialAsset,
+        package::dependency_path,
         texture::{sampler_descriptor, TextureAsset},
     },
     material::{CustomMaterial, MprSurfaceProfile},
@@ -76,8 +76,7 @@ pub struct ModelShaderSelection {
     pub render_state_warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, bevy::reflect::TypeUuid)]
-#[uuid = "83269869-1209-408e-8835-bc6f2496e829"]
+#[derive(Debug, Clone, Asset, TypePath)]
 pub struct ModelAsset {
     pub asset_ref: AssetRef,
     pub inner: ModelData<LittleEndian>,
@@ -88,6 +87,7 @@ pub struct ModelAsset {
     pub materials: HashMap<MaterialKey, Handle<CustomMaterial>>,
 }
 
+#[derive(TypePath)]
 pub struct ModelAssetLoader;
 
 impl FromWorld for ModelAssetLoader {
@@ -95,81 +95,91 @@ impl FromWorld for ModelAssetLoader {
 }
 
 impl AssetLoader for ModelAssetLoader {
-    fn load<'a>(
-        &'a self,
-        bytes: &'a [u8],
-        load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<(), Error>> {
-        Box::pin(async move {
-            let id = locate_asset_id::<LittleEndian>(bytes)?;
-            let meta = locate_meta::<LittleEndian>(bytes)?;
-            let data = ModelData::<LittleEndian>::slice(bytes, meta)?;
-            // log::info!("Loaded model {:?}", data.head);
-            // log::info!("Loaded meshes {:#?}", data.mesh);
-            let mut dependencies = HashMap::<Uuid, AssetPath>::new();
-            for values in std::iter::once(&data.mtrl.shared_data)
-                .chain(data.mtrl.materials.iter().map(|m| &m.data))
-            {
-                for data in values {
-                    match &data.data {
-                        CMaterialDataInner::Texture(texture) => {
+    type Asset = ModelAsset;
+    type Error = Error;
+    type Settings = ();
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        load_context: &mut LoadContext<'_>,
+    ) -> anyhow::Result<Self::Asset, Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        let bytes = bytes.as_slice();
+        let id = locate_asset_id::<LittleEndian>(bytes)?;
+        let meta = locate_meta::<LittleEndian>(bytes)?;
+        let data = ModelData::<LittleEndian>::slice(bytes, meta)?;
+        let (header, _, _) = FormDescriptor::<LittleEndian>::slice(bytes)?;
+        // log::info!("Loaded model {:?}", data.head);
+        // log::info!("Loaded meshes {:#?}", data.mesh);
+        let mut dependencies = HashMap::<Uuid, AssetPath>::new();
+        for values in std::iter::once(&data.mtrl.shared_data)
+            .chain(data.mtrl.materials.iter().map(|m| &m.data))
+        {
+            for data in values {
+                match &data.data {
+                    CMaterialDataInner::Texture(texture) => {
+                        if texture.id.is_nil() {
+                            continue;
+                        }
+                        dependencies.insert(
+                            texture.id,
+                            dependency_path(load_context.path(), AssetRef {
+                                id: texture.id,
+                                kind: retrolib::format::txtr::K_FORM_TXTR,
+                            })?,
+                        );
+                    }
+                    CMaterialDataInner::LayeredTexture(texture) => {
+                        for texture in &texture.textures {
                             if texture.id.is_nil() {
                                 continue;
                             }
                             dependencies.insert(
                                 texture.id,
-                                AssetPath::new(PathBuf::from(format!("{}.TXTR", texture.id)), None),
+                                dependency_path(load_context.path(), AssetRef {
+                                    id: texture.id,
+                                    kind: retrolib::format::txtr::K_FORM_TXTR,
+                                })?,
                             );
                         }
-                        CMaterialDataInner::LayeredTexture(texture) => {
-                            for texture in &texture.textures {
-                                if texture.id.is_nil() {
-                                    continue;
-                                }
-                                dependencies.insert(
-                                    texture.id,
-                                    AssetPath::new(
-                                        PathBuf::from(format!("{}.TXTR", texture.id)),
-                                        None,
-                                    ),
-                                );
-                            }
-                        }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
-            let textures = dependencies
-                .iter()
-                .map(|(u, p)| (*u, load_context.get_handle(p.clone())))
-                .collect();
-            let material_dependencies: HashMap<Uuid, AssetPath> = data
-                .mtrl
-                .materials
-                .iter()
-                .map(|m| m.material_resource_id)
-                .filter(|id| !id.is_nil())
-                .map(|id| (id, AssetPath::new(PathBuf::from(format!("{id}.MTRL")), None)))
-                .collect();
-            let material_resources = material_dependencies
-                .iter()
-                .map(|(id, path)| (*id, load_context.get_handle(path.clone())))
-                .collect();
-            load_context.set_default_asset(
-                LoadedAsset::new(ModelAsset {
-                    asset_ref: AssetRef { id, kind: K_FORM_CMDL },
-                    inner: data,
-                    textures,
-                    material_resources,
-                    shader_selections: default(),
-                    texture_images: default(),
-                    materials: default(),
-                })
-                .with_dependencies(
-                    dependencies.into_values().chain(material_dependencies.into_values()).collect(),
-                ),
-            );
-            Ok(())
+        }
+        let textures =
+            dependencies.iter().map(|(u, p)| (*u, load_context.load(p.clone()))).collect();
+        let material_dependencies: HashMap<Uuid, AssetPath> = data
+            .mtrl
+            .materials
+            .iter()
+            .map(|m| m.material_resource_id)
+            .filter(|id| !id.is_nil())
+            .map(|id| {
+                Ok((
+                    id,
+                    dependency_path(load_context.path(), AssetRef {
+                        id,
+                        kind: retrolib::format::FourCC(*b"MTRL"),
+                    })?,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        let material_resources = material_dependencies
+            .iter()
+            .map(|(id, path)| (*id, load_context.load(path.clone())))
+            .collect();
+        Ok(ModelAsset {
+            asset_ref: AssetRef { id, kind: header.id },
+            inner: data,
+            textures,
+            material_resources,
+            shader_selections: default(),
+            texture_images: default(),
+            materials: default(),
         })
     }
 
@@ -178,9 +188,11 @@ impl AssetLoader for ModelAssetLoader {
 
 impl ModelAsset {
     pub fn get_load_state(&self, server: &AssetServer) -> LoadState {
-        let textures = server.get_group_load_state(self.textures.values().map(|h| h.id()));
-        if textures != LoadState::Loaded {
-            return textures;
+        for texture in self.textures.values() {
+            let state = server.load_state(texture.id());
+            if !state.is_loaded() {
+                return state;
+            }
         }
         // MTRL failure retains the approximate viewer path, with a diagnostic.
         // Wait for every request to finish; one failed resource must not hide
@@ -188,7 +200,7 @@ impl ModelAsset {
         if self
             .material_resources
             .values()
-            .any(|h| matches!(server.get_load_state(h), LoadState::Loading | LoadState::NotLoaded))
+            .any(|h| matches!(server.load_state(h), LoadState::Loading | LoadState::NotLoaded))
         {
             LoadState::Loading
         } else {
@@ -231,10 +243,9 @@ impl ModelAsset {
                         let Some(mut image) = images.get(&asset.texture).cloned() else {
                             continue;
                         };
-                        image.sampler_descriptor = ImageSampler::Descriptor(sampler_descriptor(
-                            &params,
-                            asset.sampler_features,
-                        ));
+                        image.sampler = ImageSampler::Descriptor(
+                            sampler_descriptor(&params, asset.sampler_features).into(),
+                        );
                         images.add(image)
                     };
                     self.texture_images.insert(key, handle);
@@ -379,7 +390,17 @@ fn build_material(
     // The bound draw state is already live when the composed state is bound.
     // An override excluding RT0 must preserve that target's previous settings.
     let mut warnings = render_state.apply(&bound);
+    let bound_blend = render_state.blend;
     warnings.extend(render_state.apply(&state));
+    if render_state.color_routing() == remax::maxwell::graphics::ColorOutputRouting::DualSource {
+        // The approximate surface shader supplies one color, so it cannot use
+        // native secondary-color factors. Preserve the mesh-class approximation.
+        render_state.blend = bound_blend;
+        warnings.push(
+            "Preview material cannot supply a secondary blend color; mesh-class blending retained"
+                .into(),
+        );
+    }
     let mut out_mat = CustomMaterial {
         alpha_mode: if key.mesh_class & 1 == 0 { AlphaMode::Opaque } else { AlphaMode::Blend },
         render_state,
@@ -413,7 +434,7 @@ fn build_material(
         match data.data_id {
             EMaterialDataId::DIFT | EMaterialDataId::BCLR => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
-                    out_mat.base_color_l0 = Color::WHITE;
+                    out_mat.base_color_l0 = LinearRgba::WHITE;
                     out_mat.base_color_texture_0 =
                         texture_images.get(&TextureImageKey::from(texture)).cloned();
                     out_mat.base_color_uv_0 =
@@ -474,7 +495,7 @@ fn build_material(
             },
             EMaterialDataId::NMAP => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
-                    out_mat.normal_map_l0 = Color::WHITE;
+                    out_mat.normal_map_l0 = LinearRgba::WHITE;
                     out_mat.normal_map_texture_0 =
                         texture_images.get(&TextureImageKey::from(texture)).cloned();
                     out_mat.normal_map_uv_0 =
@@ -508,7 +529,7 @@ fn build_material(
             },
             EMaterialDataId::METL => match &data.data {
                 CMaterialDataInner::Texture(texture) => {
-                    out_mat.metallic_map_l0 = Color::WHITE;
+                    out_mat.metallic_map_l0 = LinearRgba::WHITE;
                     out_mat.metallic_map_texture_0 =
                         texture_images.get(&TextureImageKey::from(texture)).cloned();
                     out_mat.metallic_map_uv_0 =

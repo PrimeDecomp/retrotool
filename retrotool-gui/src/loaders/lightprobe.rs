@@ -1,8 +1,9 @@
 use anyhow::Error;
 use bevy::{
-    asset::{AssetLoader, BoxedFuture, LoadContext, LoadedAsset},
+    asset::{io::Reader, AssetLoader, LoadContext},
+    image::CompressedImageFormats,
     prelude::*,
-    render::{renderer::RenderDevice, texture::CompressedImageFormats},
+    render::renderer::RenderDevice,
 };
 use retrolib::format::{
     foot::{locate_asset_id, locate_meta},
@@ -15,16 +16,14 @@ use crate::{
     AssetRef,
 };
 
-#[derive(Debug, Clone, bevy::reflect::TypeUuid)]
-#[uuid = "f5d65a8b-ffcc-47ea-8c9d-1ab30cca723c"]
+#[derive(Debug, Clone, Asset, TypePath)]
 pub struct LightProbeAsset {
-    #[allow(unused)]
     pub head: LightProbeBundleHeader,
     pub textures: Vec<TextureAsset>,
-    #[allow(unused)]
     pub extra: Vec<LightProbeExtra>,
 }
 
+#[derive(TypePath)]
 pub struct LightProbeAssetLoader {
     supported_formats: CompressedImageFormats,
     sampler_features: wgpu_types::Features,
@@ -44,53 +43,50 @@ impl FromWorld for LightProbeAssetLoader {
 }
 
 impl AssetLoader for LightProbeAssetLoader {
-    fn load<'a>(
-        &'a self,
-        bytes: &'a [u8],
-        load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<(), Error>> {
-        Box::pin(async move {
-            let id = locate_asset_id::<LittleEndian>(bytes)?;
-            let meta = locate_meta::<LittleEndian>(bytes)?;
-            let data = LightProbeData::<LittleEndian>::slice(bytes, meta)?;
-            info!("Loading light probe {} {:?}", id, data.head);
+    type Asset = LightProbeAsset;
+    type Error = Error;
+    type Settings = ();
 
-            let mut textures = Vec::with_capacity(data.textures.len());
-            for (idx, texture_data) in data.textures.into_iter().enumerate() {
-                let result = load_texture_asset(
-                    texture_data,
-                    &self.supported_formats,
-                    self.sampler_features,
-                )?;
-                let mut slice_handles = Vec::with_capacity(result.slices.len());
-                for (mip, images) in result.slices.into_iter().enumerate() {
-                    let mut handles = Vec::with_capacity(images.len());
-                    for (layer, image) in images.into_iter().enumerate() {
-                        handles.push(load_context.set_labeled_asset(
-                            &format!("image_{idx}_mip_{mip}_layer_{layer}"),
-                            LoadedAsset::new(image),
-                        ));
-                    }
-                    slice_handles.push(handles);
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        load_context: &mut LoadContext<'_>,
+    ) -> anyhow::Result<Self::Asset, Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        let bytes = bytes.as_slice();
+        let id = locate_asset_id::<LittleEndian>(bytes)?;
+        let meta = locate_meta::<LittleEndian>(bytes)?;
+        let data = LightProbeData::<LittleEndian>::slice(bytes, meta)?;
+        info!("Loading light probe {} {:?}", id, data.head);
+
+        let mut textures = Vec::with_capacity(data.textures.len());
+        for (idx, texture_data) in data.textures.into_iter().enumerate() {
+            let result =
+                load_texture_asset(texture_data, &self.supported_formats, self.sampler_features)?;
+            let mut slice_handles = Vec::with_capacity(result.slices.len());
+            for (mip, images) in result.slices.into_iter().enumerate() {
+                let mut handles = Vec::with_capacity(images.len());
+                for (layer, image) in images.into_iter().enumerate() {
+                    handles.push(
+                        load_context.add_labeled_asset(
+                            format!("image_{idx}_mip_{mip}_layer_{layer}"),
+                            image,
+                        ),
+                    );
                 }
-                textures.push(TextureAsset {
-                    asset_ref: AssetRef { id, kind: K_FORM_LTPB },
-                    inner: result.inner,
-                    texture: load_context.set_labeled_asset(
-                        &format!("texture_{idx}"),
-                        LoadedAsset::new(result.texture),
-                    ),
-                    sampler_features: self.sampler_features,
-                    slices: slice_handles,
-                });
+                slice_handles.push(handles);
             }
-            load_context.set_default_asset(LoadedAsset::new(LightProbeAsset {
-                head: data.head,
-                textures,
-                extra: data.extra,
-            }));
-            Ok(())
-        })
+            textures.push(TextureAsset {
+                asset_ref: AssetRef { id, kind: K_FORM_LTPB },
+                inner: result.inner,
+                texture: load_context.add_labeled_asset(format!("texture_{idx}"), result.texture),
+                sampler_features: self.sampler_features,
+                slices: slice_handles,
+            });
+        }
+        Ok(LightProbeAsset { head: data.head, textures, extra: data.extra })
     }
 
     fn extensions(&self) -> &[&str] { &["ltpb"] }

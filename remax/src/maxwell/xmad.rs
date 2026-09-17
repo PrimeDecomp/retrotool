@@ -1,6 +1,8 @@
 //! Maxwell extended 16-bit multiply/add operands. uam emitXMAD/nv50_ir.h at
 //! 5a5afc2 supplies encodings/modes; operands are checked against nvdisasm SM53.
 //! NAK uses other integer multiply encodings, so it is not an XMAD encoder oracle.
+//! Non-carry semantics are also checked against yuzu's
+//! `integer_short_multiply_add.cpp` at 6bb3815b7662b65502ea6a19357bd0354ff27714.
 
 use serde_derive::Serialize;
 

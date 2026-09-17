@@ -2,7 +2,8 @@
 //!
 //! The caller supplies the registered context slots and current primary pointer.
 //! Volume bounds and modulation color follow different native selection rules.
-//! These helpers do not infer loaded areas, scene groups or sparse tile priority.
+//! These helpers do not infer loaded areas or scene groups. Tile registration
+//! and mapping decisions are modeled separately in baked_lighting::residency.
 
 use std::collections::{BTreeMap, BTreeSet};
 

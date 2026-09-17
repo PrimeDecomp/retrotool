@@ -1,195 +1,74 @@
 use bevy::{
-    asset::load_internal_asset,
-    core_pipeline::clear_color::ClearColorConfig,
-    ecs::{query::QueryItem, system::lifetimeless::Read},
+    asset::{load_internal_asset, uuid_handle},
+    core_pipeline::{core_3d::main_opaque_pass_3d, schedule::Core3d, Core3dSystems},
     prelude::*,
-    reflect::TypeUuid,
     render::{
         camera::ExtractedCamera,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
-        render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext, SlotInfo, SlotType},
         render_resource::{
-            BindGroupLayout, CachedRenderPipelineId, FragmentState, PipelineCache,
+            BindGroupLayoutDescriptor, CachedRenderPipelineId, FragmentState, PipelineCache,
             RenderPipelineDescriptor, ShaderType, SpecializedRenderPipeline,
             SpecializedRenderPipelines, VertexState,
         },
-        renderer::{RenderContext, RenderDevice},
-        texture::BevyDefault,
-        view::{ExtractedView, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
-        RenderApp, RenderSet,
+        renderer::{RenderContext, ViewQuery},
+        view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
+        Render, RenderApp, RenderSystems,
     },
 };
 
-const GRID_SHADER_HANDLE: HandleUntyped =
-    HandleUntyped::weak_from_u64(Shader::TYPE_UUID, 4444964537800926070);
+const GRID_SHADER_HANDLE: Handle<Shader> = uuid_handle!("e784fdf0-c4d0-411b-a8be-9e87c98b486a");
 
-#[derive(Default)]
 pub struct GridPlugin;
 
 impl Plugin for GridPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, GRID_SHADER_HANDLE, "grid.wgsl", Shader::from_wgsl);
-
-        app.register_type::<GridSettings>()
-            .add_plugin(ExtractComponentPlugin::<GridSettings>::default());
-
-        let render_app = match app.get_sub_app_mut(RenderApp) {
-            Ok(render_app) => render_app,
-            Err(_) => return,
-        };
-
+        app.add_plugins(ExtractComponentPlugin::<GridSettings>::default());
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .init_resource::<GridPipeline>()
             .init_resource::<SpecializedRenderPipelines<GridPipeline>>()
-            .add_system(prepare_grid_pipeline.in_set(RenderSet::Prepare));
-
-        {
-            let grid_node = GridCameraDriver::from_world(&mut render_app.world);
-            let mut graph = render_app.world.resource_mut::<RenderGraph>();
-            let draw_3d_graph =
-                graph.get_sub_graph_mut(bevy::core_pipeline::core_3d::graph::NAME).unwrap();
-            draw_3d_graph.add_node(GridCameraDriver::IN_NODE, grid_node);
-            draw_3d_graph.add_slot_edge(
-                draw_3d_graph.input_node().id,
-                bevy::core_pipeline::core_3d::graph::input::VIEW_ENTITY,
-                GridCameraDriver::IN_NODE,
-                GridCameraDriver::IN_VIEW,
+            .add_systems(Render, prepare_grid_pipeline.in_set(RenderSystems::PrepareBindGroups))
+            .add_systems(
+                Core3d,
+                draw_grid.before(main_opaque_pass_3d).in_set(Core3dSystems::MainPass),
             );
-            // PREPASS -> GRID -> MAIN_PASS
-            draw_3d_graph.add_node_edge(
-                bevy::core_pipeline::core_3d::graph::node::PREPASS,
-                GridCameraDriver::IN_NODE,
-            );
-            draw_3d_graph.add_node_edge(
-                GridCameraDriver::IN_NODE,
-                bevy::core_pipeline::core_3d::graph::node::MAIN_PASS,
-            );
-        }
     }
 }
 
-struct GridCameraDriver {
-    #[allow(clippy::type_complexity)]
-    view_query: QueryState<(
-        Read<ViewTarget>,
-        Read<ViewUniformOffset>,
-        Read<ExtractedCamera>,
-        Read<GridPipelineIds>,
-        Read<GridSettings>,
-    )>,
-}
-
-impl GridCameraDriver {
-    pub const IN_NODE: &'static str = "grid";
-    pub const IN_VIEW: &'static str = "view";
-}
-
-impl FromWorld for GridCameraDriver {
-    fn from_world(world: &mut World) -> Self { Self { view_query: QueryState::new(world) } }
-}
-
-impl Node for GridCameraDriver {
-    fn input(&self) -> Vec<SlotInfo> { vec![SlotInfo::new(Self::IN_VIEW, SlotType::Entity)] }
-
-    fn update(&mut self, world: &mut World) { self.view_query.update_archetypes(world); }
-
-    fn run(
-        &self,
-        graph: &mut RenderGraphContext,
-        render_context: &mut RenderContext,
-        world: &World,
-    ) -> Result<(), NodeRunError> {
-        let pipeline_res = world.resource::<GridPipeline>();
-        let pipeline_cache = world.resource::<PipelineCache>();
-        let view_uniforms = world.resource::<ViewUniforms>();
-
-        let view_entity = graph.get_input_entity(Self::IN_VIEW)?;
-        let Ok((target, offset, camera, pipeline_ids, settings)) =
-            self.view_query.get_manual(world, view_entity)
-        else {
-            return Ok(());
-        };
-
-        let (Some(pipeline), Some(resource)) =
-            (pipeline_cache.get_render_pipeline(pipeline_ids.id), view_uniforms.uniforms.binding())
-        else {
-            return Ok(());
-        };
-
-        render_context.command_encoder().push_debug_group("grid");
-        {
-            let bind_group =
-                render_context.render_device().create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("grid_bind_group"),
-                    layout: &pipeline_res.bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry { binding: 0, resource }],
-                });
-
-            let color_attachment = target.get_color_attachment(wgpu::Operations {
-                load: match settings.clear_color {
-                    ClearColorConfig::Default => {
-                        wgpu::LoadOp::Clear(world.resource::<ClearColor>().0.into())
-                    }
-                    ClearColorConfig::Custom(color) => wgpu::LoadOp::Clear(color.into()),
-                    ClearColorConfig::None => wgpu::LoadOp::Load,
-                },
-                store: true,
-            });
-            let mut render_pass =
-                render_context.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
-                    label: Some("grid_render_pass"),
-                    color_attachments: &[Some(color_attachment)],
-                    depth_stencil_attachment: None,
-                });
-            if let Some(viewport) = &camera.viewport {
-                render_pass.set_camera_viewport(viewport);
-            }
-            render_pass.set_bind_group(0, &bind_group, &[offset.offset]);
-            render_pass.set_render_pipeline(pipeline);
-            render_pass.draw(0..4, 0..1);
-        }
-        render_context.command_encoder().pop_debug_group();
-        Ok(())
-    }
-}
+/// Marks a scene viewport which needs the ground grid.
+#[derive(Component, ExtractComponent, Clone, Default)]
+pub struct GridSettings;
 
 #[derive(Component)]
-pub struct GridPipelineIds {
-    pub id: CachedRenderPipelineId,
-}
+struct GridPipelineId(CachedRenderPipelineId);
 
 #[derive(Resource)]
-pub struct GridPipeline {
-    pub bind_group_layout: BindGroupLayout,
+struct GridPipeline {
+    layout: BindGroupLayoutDescriptor,
+}
+
+impl Default for GridPipeline {
+    fn default() -> Self {
+        Self {
+            layout: BindGroupLayoutDescriptor::new("grid view", &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: Some(ViewUniform::min_size()),
+                },
+                count: None,
+            }]),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone)]
-pub struct GridPipelineKey {
-    pub msaa_samples: u32,
-    pub texture_format: wgpu::TextureFormat,
-}
-
-impl FromWorld for GridPipeline {
-    fn from_world(world: &mut World) -> Self {
-        let render_device = world.resource::<RenderDevice>();
-
-        let bind_group_layout =
-            render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("grid_bind_group_layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: Some(ViewUniform::min_size()),
-                    },
-                    count: None,
-                }],
-            });
-
-        Self { bind_group_layout }
-    }
+struct GridPipelineKey {
+    samples: u32,
+    format: wgpu::TextureFormat,
 }
 
 impl SpecializedRenderPipeline for GridPipeline {
@@ -197,76 +76,77 @@ impl SpecializedRenderPipeline for GridPipeline {
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         RenderPipelineDescriptor {
-            label: Some("grid_pipeline".into()),
-            layout: vec![self.bind_group_layout.clone()],
+            label: Some("grid".into()),
+            layout: vec![self.layout.clone()],
             vertex: VertexState {
-                shader: GRID_SHADER_HANDLE.typed::<Shader>(),
-                shader_defs: vec![],
-                entry_point: "vertex".into(),
-                buffers: vec![],
+                shader: GRID_SHADER_HANDLE,
+                entry_point: Some("vertex".into()),
+                ..default()
             },
             fragment: Some(FragmentState {
-                shader: GRID_SHADER_HANDLE.typed::<Shader>(),
-                shader_defs: vec![],
-                entry_point: "fragment".into(),
+                shader: GRID_SHADER_HANDLE,
+                entry_point: Some("fragment".into()),
                 targets: vec![Some(wgpu::ColorTargetState {
-                    format: key.texture_format,
+                    format: key.format,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::COLOR,
                 })],
+                ..default()
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
                 ..default()
             },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: key.msaa_samples,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            push_constant_ranges: Vec::new(),
+            multisample: wgpu::MultisampleState { count: key.samples, ..default() },
+            ..default()
         }
     }
 }
 
-pub fn prepare_grid_pipeline(
+fn prepare_grid_pipeline(
     mut commands: Commands,
-    pipeline_cache: Res<PipelineCache>,
+    cache: Res<PipelineCache>,
     mut pipelines: ResMut<SpecializedRenderPipelines<GridPipeline>>,
     pipeline: Res<GridPipeline>,
-    views: Query<(Entity, &ExtractedView), With<GridSettings>>,
-    msaa: Res<Msaa>,
+    views: Query<(Entity, &ViewTarget, &Msaa), With<GridSettings>>,
 ) {
-    for (entity, view) in &views {
-        let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, GridPipelineKey {
-            msaa_samples: msaa.samples(),
-            texture_format: if view.hdr {
-                ViewTarget::TEXTURE_FORMAT_HDR
-            } else {
-                wgpu::TextureFormat::bevy_default()
-            },
+    for (entity, target, msaa) in &views {
+        let id = pipelines.specialize(&cache, &pipeline, GridPipelineKey {
+            samples: msaa.samples(),
+            format: target.main_texture_format(),
         });
-        commands.entity(entity).insert(GridPipelineIds { id: pipeline_id });
+        commands.entity(entity).insert(GridPipelineId(id));
     }
 }
 
-#[derive(Component, Reflect, Clone)]
-pub struct GridSettings {
-    pub clear_color: ClearColorConfig,
-}
-
-impl Default for GridSettings {
-    fn default() -> Self { Self { clear_color: ClearColorConfig::None } }
-}
-
-// noinspection RsSortImplTraitMembers
-impl ExtractComponent for GridSettings {
-    type Filter = With<Camera>;
-    type Out = Self;
-    type Query = Read<Self>;
-
-    fn extract_component(settings: QueryItem<Self::Query>) -> Option<Self::Out> {
-        Some(settings.clone())
+fn draw_grid(
+    view: ViewQuery<(&ViewTarget, &ViewUniformOffset, &ExtractedCamera, &GridPipelineId)>,
+    pipeline: Res<GridPipeline>,
+    cache: Res<PipelineCache>,
+    uniforms: Res<ViewUniforms>,
+    mut ctx: RenderContext,
+) {
+    let (target, offset, camera, id) = view.into_inner();
+    let (Some(render_pipeline), Some(resource)) =
+        (cache.get_render_pipeline(id.0), uniforms.uniforms.binding())
+    else {
+        return;
+    };
+    let group = ctx.render_device().create_bind_group(
+        "grid view",
+        &cache.get_bind_group_layout(&pipeline.layout),
+        &[wgpu::BindGroupEntry { binding: 0, resource }],
+    );
+    let attachments = [Some(target.get_color_attachment())];
+    let mut pass = ctx.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
+        label: Some("grid"),
+        color_attachments: &attachments,
+        ..default()
+    });
+    if let Some(viewport) = &camera.viewport {
+        pass.set_camera_viewport(viewport);
     }
+    pass.set_bind_group(0, &group, &[offset.offset]);
+    pass.set_render_pipeline(render_pipeline);
+    pass.draw(0..4, 0..1);
 }

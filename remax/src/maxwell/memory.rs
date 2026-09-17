@@ -1,10 +1,17 @@
-//! Maxwell indexed constant loads. Verified against devkitPro/uam emitLDC
+//! Maxwell memory instructions. Indexed constant loads verified against uam emitLDC
 //! (5a5afc2bae8b55409ab36ba45be63fcb73f68993), Mesa NAK OpLdc
 //! (822120d6d5c0109f98c3fbf85ec716c5d1fa00b6), and nvdisasm SM53.
 
 use serde_derive::Serialize;
 
 use crate::maxwell::Instruction;
+
+mod global;
+pub use global::{GlobalLoad, GlobalLoadCache, GlobalLoadType};
+mod local;
+pub use local::{
+    LocalLoadCache, LocalMemoryInstruction, LocalMemoryKind, LocalMemoryType, LocalStoreCache,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum LdcType {

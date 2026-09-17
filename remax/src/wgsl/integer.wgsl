@@ -71,6 +71,7 @@ fn mpr_flo(raw:u32, signed_source:bool, shift_amount:bool)->u32 {
     let bits=select(raw,~raw,signed_source && (raw&0x80000000u)!=0u);
     // Naga 0.11 predates countLeadingZeros; its Metal firstLeadingBit lowering
     // returns clz instead of the bit index. Use bounded integer steps on all APIs.
+    // Removal: docs/rendering-compatibility.md#leading-bit-builtins.
     if (bits==0u) { return select(0xffffffffu,32u,shift_amount); }
     var remaining=bits;
     var leading=0u;

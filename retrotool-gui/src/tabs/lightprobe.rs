@@ -6,6 +6,9 @@ use bevy::{
 use bevy_egui::EguiUserTextures;
 use retrolib::format::txtr::ETextureType;
 
+mod inspection;
+use inspection::ProbeInspection;
+
 use crate::{
     icon,
     loaders::lightprobe::LightProbeAsset,
@@ -18,6 +21,7 @@ pub struct LightProbeTab {
     pub asset_ref: AssetRef,
     pub handle: Handle<LightProbeAsset>,
     pub loaded_textures: Vec<Vec<LoadedTexture>>,
+    inspection: Option<ProbeInspection>,
 }
 
 impl LightProbeTab {
@@ -47,7 +51,9 @@ impl EditorTabSystem for LightProbeTab {
             for mip in &texture.slices {
                 let mut texture_ids = Vec::with_capacity(mip.len());
                 for image in mip {
-                    texture_ids.push(egui_textures.add_image(image.clone_weak()));
+                    texture_ids.push(
+                        egui_textures.add_image(bevy_egui::EguiTextureHandle::Weak(image.id())),
+                    );
                 }
                 let size = mip
                     .first()
@@ -70,18 +76,14 @@ impl EditorTabSystem for LightProbeTab {
 
         ui.label(format!("{} {}", self.asset_ref.kind, self.asset_ref.id));
 
-        match server.get_load_state(&self.handle) {
+        match server.load_state(&self.handle) {
             LoadState::NotLoaded | LoadState::Loading => {
                 ui.spinner();
                 return;
             }
             LoadState::Loaded => {}
-            LoadState::Failed => {
+            LoadState::Failed(_) => {
                 ui.colored_label(egui::Color32::RED, "Loading failed");
-                return;
-            }
-            LoadState::Unloaded => {
-                ui.colored_label(egui::Color32::RED, "Unloaded");
                 return;
             }
         };
@@ -90,8 +92,30 @@ impl EditorTabSystem for LightProbeTab {
             return;
         };
 
+        ui.push_id(("probe_inspection", self.asset_ref.id), |ui| {
+            self.inspection.get_or_insert_with(|| ProbeInspection::new(asset)).ui(ui, asset);
+        });
+
         for (txtr_idx, txtr) in asset.textures.iter().enumerate() {
+            let Some(mip) = self.loaded_textures.get(txtr_idx).and_then(|mips| mips.first()) else {
+                ui.spinner();
+                continue;
+            };
             ui.group(|ui| {
+                if let Some(extra) = asset.extra.get(txtr_idx) {
+                    let name = [
+                        "Midpoint",
+                        "Range",
+                        "Exponent",
+                        "Red gradient",
+                        "Green gradient",
+                        "Blue gradient",
+                    ]
+                    .get(extra.layer as usize)
+                    .copied()
+                    .unwrap_or("Unknown layer");
+                    ui.label(format!("{name} • tile {:?}", extra.tile_position.to_array()));
+                }
                 ui.label(format!("Type: {}", txtr.inner.head.kind));
                 ui.label(format!("Format: {}", txtr.inner.head.format));
                 ui.label(format!(
@@ -102,13 +126,12 @@ impl EditorTabSystem for LightProbeTab {
                     txtr.inner.head.mip_sizes.len()
                 ));
 
-                let mip = &self.loaded_textures[txtr_idx][0];
                 let size = egui::Vec2::new(mip.width as f32, mip.height as f32);
                 let draw_image =
                     |ui: &mut egui::Ui, rect: &egui::Rect, i: usize, x: u32, y: u32, flip: bool| {
                         let min = rect.min + size * egui::Vec2::new(x as f32, y as f32);
                         let y_range = if flip { 1.0..=0.0 } else { 0.0..=1.0 };
-                        egui::widgets::Image::new(mip.texture_ids[i], size)
+                        egui::widgets::Image::new((mip.texture_ids[i], size))
                             .uv(egui::Rect::from_x_y_ranges(0.0..=1.0, y_range))
                             .paint_at(ui, egui::Rect::from_min_size(min, size));
                     };

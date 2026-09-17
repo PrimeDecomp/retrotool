@@ -145,6 +145,7 @@ pub struct Uniform {
 /// NShaderCore::SResource_NVN, 12 bytes. Binding 0xffff means absent.
 #[derive(Clone, Debug, BinRead, Serialize)]
 pub struct Resource {
+    /// 0 = texture, 1 = storage buffer. Other values retain their raw encoding.
     pub kind: u32,
     /// Vertex, pixel, geometry, compute, in that order.
     pub bindings: [u16; 4],

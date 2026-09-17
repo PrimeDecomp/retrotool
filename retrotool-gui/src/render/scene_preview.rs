@@ -1,24 +1,34 @@
-//! Explicit model-viewer scene inputs. These use recovered native providers with
-//! controlled preview values; they do not reconstruct a ROOM's lighting state.
+//! Isolated model/ROOM inspection inputs. Recovered providers use explicit
+//! preview values, optionally with an authored atlas. Native scene registration,
+//! script modulation and probe lighting are not reconstructed here.
 
 use std::{fs::File, io::Read, path::PathBuf};
 
 use anyhow::{ensure, Context, Result};
-use bevy::{prelude::*, render::renderer::RenderDevice};
+use bevy::{
+    camera::visibility::NoFrustumCulling,
+    prelude::*,
+    render::renderer::{RenderAdapterInfo, RenderDevice},
+};
 use retrolib::format::{
-    cmdl::{CMaterialDataInner, EMaterialDataId},
+    cmdl::{CMaterialData, CMaterialDataInner, EMaterialDataId, EMaterialDataType},
     material_ambient::AmbientSource,
     material_scene_bindings::{
-        ReflectionProbeSnapshot, SceneMaterialInputs, SceneMaterialSnapshot, SceneTextureView,
+        DrawUniform, ReflectionProbeSnapshot, SceneMaterialInputs, SceneMaterialSnapshot,
+        SceneTextureView,
     },
+    model_data::wind::WindEnvironment,
     reflection_probe::{ReflectionBrdfLut, ReflectionProbeParams},
     texture_sampler::TextureSamplerParams,
     txtr::{ETextureFormat, ETextureType},
 };
 
-use super::original_shader::{
-    prepare_mesh_with_scene_and_features, OriginalShaderInfo, OriginalShaderMesh,
-    OriginalShaderTime,
+use super::{
+    original_shader::{
+        prepare_mesh_with_scene, Compiler, OriginalShaderInfo, OriginalShaderMesh,
+        OriginalShaderTime, ShaderOptions,
+    },
+    scene_lighting::{BakedAtlasLighting, ATLAS_TOKEN},
 };
 use crate::{
     loaders::{
@@ -35,6 +45,7 @@ const BRDF_TOKEN: u64 = 1;
 #[derive(Resource)]
 pub struct ShaderPreview {
     enabled: bool,
+    compiler: Compiler,
     revision: u64,
     brdf: Option<Handle<Image>>,
     reflection: [u8; 0x30],
@@ -42,8 +53,8 @@ pub struct ShaderPreview {
     loaded_path: Option<PathBuf>,
     pending_path: Option<PathBuf>,
     error: Option<String>,
-    uv_seconds: f64,
-    uv_playing: bool,
+    animation_seconds: f64,
+    animation_playing: bool,
     preference_path: Option<PathBuf>,
 }
 
@@ -65,6 +76,7 @@ impl Default for ShaderPreview {
         }
         Self {
             enabled: true,
+            compiler: Compiler::Legacy,
             revision: 0,
             brdf: None,
             reflection,
@@ -72,32 +84,32 @@ impl Default for ShaderPreview {
             loaded_path: None,
             pending_path: None,
             error: None,
-            uv_seconds: 0.0,
-            uv_playing: false,
+            animation_seconds: 0.0,
+            animation_playing: false,
             preference_path: None,
         }
     }
 }
 
 impl ShaderPreview {
-    pub fn uv_time(&self) -> f64 { self.uv_seconds }
+    pub fn animation_time(&self) -> f64 { self.animation_seconds }
 
-    pub fn set_uv_playing(&mut self, playing: bool) { self.uv_playing = playing; }
+    pub fn set_animation_playing(&mut self, playing: bool) { self.animation_playing = playing; }
 
-    pub fn set_uv_time(&mut self, seconds: f64) -> Result<()> {
+    pub fn set_animation_time(&mut self, seconds: f64) -> Result<()> {
         ensure!(
             seconds.is_finite() && seconds >= 0.0,
-            "UV preview time must be finite and nonnegative"
+            "Material preview time must be finite and nonnegative"
         );
-        self.uv_seconds = seconds;
+        self.animation_seconds = seconds;
         Ok(())
     }
 
     fn advance_uv(&mut self, seconds: f64) {
-        if self.enabled && self.uv_playing && seconds.is_finite() && seconds >= 0.0 {
-            let next = self.uv_seconds + seconds;
+        if self.enabled && self.animation_playing && seconds.is_finite() && seconds >= 0.0 {
+            let next = self.animation_seconds + seconds;
             if next.is_finite() {
-                self.uv_seconds = next;
+                self.animation_seconds = next;
             }
         }
     }
@@ -132,6 +144,13 @@ impl ShaderPreview {
         std::fs::create_dir_all(path.parent().context("BRDF preference directory missing")?)?;
         std::fs::write(path, serde_json::to_vec(table)?)?;
         Ok(())
+    }
+
+    pub fn set_compiler(&mut self, compiler: Compiler) {
+        if self.compiler != compiler {
+            self.compiler = compiler;
+            self.revision += 1;
+        }
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -187,6 +206,7 @@ impl ShaderPreview {
                     wgpu::TextureDimension::D2,
                     &bytes,
                     wgpu::TextureFormat::Rg8Unorm,
+                    bevy::asset::RenderAssetUsages::default(),
                 )),
             ))
         })();
@@ -206,20 +226,30 @@ impl ShaderPreview {
         }
     }
 
-    pub fn inputs(&self) -> Result<SceneMaterialInputs<'_>> {
-        self.inputs_with_reflection(&self.reflection)
-    }
-
     fn inputs_with_reflection<'a>(
         &self,
         reflection: &'a [u8; 0x30],
     ) -> Result<SceneMaterialInputs<'a>> {
         let mut scene = SceneMaterialInputs::default();
+        // Isolated previews start at system time zero with unit exposure.
+        // These are explicit host inputs, not inferred game scene state.
+        scene.global_system_values = Some(Default::default());
+        scene.wind_environment = Some(WindEnvironment::native_fallback());
+        scene.set_draw_uniform(DrawUniform::LodParameters);
         scene.set(
             EMaterialDataId::ALLD,
             Some(SceneMaterialSnapshot::AmbientLight(AmbientSource::full_bright())),
         )?;
         scene.set(EMaterialDataId::CLLD, None)?;
+        // CGameUIRenderJob::RenderPrimaryPass (0x7100b359b4) supplies the
+        // default back/top backlight intensities, then two zero components.
+        // World rendering can modulate these through backlight hints; this is
+        // the standalone preview's explicit lighting policy.
+        scene.set_uniform(CMaterialData {
+            data_id: EMaterialDataId::BKGL,
+            data_type: EMaterialDataType::Color,
+            data: CMaterialDataInner::Color([4.0, 2.0, 0.0, 0.0].into()),
+        })?;
         if self.brdf.is_some() {
             scene.set(
                 EMaterialDataId::REFP,
@@ -237,11 +267,13 @@ impl ShaderPreview {
         Ok(scene)
     }
 
-    /// Standalone model preview: pair REFP with the material's actual REFL view.
+    /// Pair preview REFP with the material's actual REFL view, then apply an
+    /// optional authored atlas. This does not resolve spatial reflection probes.
     /// Native resolve (7100217170) uses the texture token's mip count minus one.
     /// The viewer binds complete textures, so the TXTR mip count is that range.
     /// Scene renderers supplying their own probe snapshots use the lower-level
-    /// prepare_mesh_with_scene_and_features API instead.
+    /// prepare_mesh_with_scene API instead.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_mesh(
         &self,
         model: &ModelAsset,
@@ -249,7 +281,8 @@ impl ShaderPreview {
         mirrored: bool,
         materials: &Assets<MaterialAsset>,
         textures: &Assets<TextureAsset>,
-        features: wgpu::Features,
+        options: ShaderOptions,
+        atlas: Option<&BakedAtlasLighting>,
     ) -> Result<super::original_shader::OriginalShaderMesh> {
         let mut reflection = self.reflection;
         if self.brdf.is_some() {
@@ -274,16 +307,28 @@ impl ShaderPreview {
                 reflection[0x20..0x24].copy_from_slice(&max_mip.to_le_bytes());
             }
         }
-        let scene = self.inputs_with_reflection(&reflection)?;
-        prepare_mesh_with_scene_and_features(
+        let mut scene = self.inputs_with_reflection(&reflection)?;
+        let atlas_texture = atlas
+            .map(|atlas| {
+                let texture = textures.get(&atlas.texture).context("ROOM lightmap unavailable")?;
+                atlas.bind(texture, &mut scene)?;
+                Ok::<_, anyhow::Error>(texture)
+            })
+            .transpose()?;
+        prepare_mesh_with_scene(
             model,
             index,
             mirrored,
             materials,
             textures,
             &scene,
-            features,
-            |token| self.image(token),
+            options,
+            |token| {
+                if token == ATLAS_TOKEN {
+                    return Ok(atlas_texture.context("ROOM lightmap unavailable")?.texture.clone());
+                }
+                self.image(token)
+            },
         )
     }
 
@@ -299,7 +344,12 @@ impl ShaderPreview {
     ) -> String {
         let (mut total, mut original, mut fallback, mut preparing, mut unavailable) =
             (0, 0, 0, 0, 0);
+        let mut baked = 0;
         for mesh in meshes {
+            if mesh.is_some_and(|mesh| mesh.original.as_ref().is_some_and(|info| info.baked_atlas))
+            {
+                baked += 1;
+            }
             total += 1;
             match mesh.map(|m| m.status(self)) {
                 Some(PreviewMeshStatus::Original) => original += 1,
@@ -320,7 +370,11 @@ impl ShaderPreview {
             text.push_str(&format!("; {unavailable} unavailable"));
         }
         if original != 0 {
-            text.push_str("\nOriginal shaders use full-bright preview lighting");
+            if baked == 0 {
+                text.push_str("\nOriginal shaders use full-bright preview lighting");
+            } else {
+                text.push_str(&format!("\nBaked lightmap: {baked} draws; white modulation"));
+            }
         }
         text
     }
@@ -329,29 +383,42 @@ impl ShaderPreview {
         let mut enabled = self.enabled;
         ui.checkbox(&mut enabled, "Use original shaders (experimental)");
         self.set_enabled(enabled);
-        ui.label("Original shaders use full-bright ambient lighting. Area lighting and shadows are not reconstructed yet.");
+        ui.label("Models use full-bright ambient lighting. ROOMs can use their baked lightmaps; probes and dynamic lighting are not yet applied.");
         ui.separator();
-        ui.label("UV animation");
+        ui.label("Compiler");
+        let mut compiler = self.compiler;
+        for option in [
+            Compiler::Legacy,
+            Compiler::Remax(remax::program::wgsl::Profile::Rendering),
+            Compiler::Remax(remax::program::wgsl::Profile::Checked),
+        ] {
+            ui.radio_value(&mut compiler, option, option.label());
+        }
+        self.set_compiler(compiler);
+        if matches!(compiler, Compiler::Remax(_)) {
+            ui.small("Experimental semantic compiler. GPU faults are checked asynchronously; a failure switches the affected instance to preview shading.");
+        }
+        ui.label("Material animation");
         ui.horizontal(|ui| {
-            if ui.button(if self.uv_playing { "Pause" } else { "Play" }).clicked() {
-                self.set_uv_playing(!self.uv_playing);
+            if ui.button(if self.animation_playing { "Pause" } else { "Play" }).clicked() {
+                self.set_animation_playing(!self.animation_playing);
             }
             if ui.button("Reset").clicked() {
-                self.set_uv_time(0.0).unwrap();
-                self.set_uv_playing(false);
+                self.set_animation_time(0.0).unwrap();
+                self.set_animation_playing(false);
             }
-            let mut seconds = self.uv_time();
+            let mut seconds = self.animation_time();
             let response = ui.add(
                 egui::DragValue::new(&mut seconds)
                     .speed(0.05)
-                    .clamp_range(0.0..=1_000_000.0)
+                    .range(0.0..=1_000_000.0)
                     .suffix(" s"),
             );
             if response.changed() {
-                let _ = self.set_uv_time(seconds);
+                let _ = self.set_animation_time(seconds);
             }
         });
-        ui.small("Animates supported UV transforms in original shaders. Skeletal animation is not connected yet.");
+        ui.small("Controls playback for supported material animations.");
         ui.separator();
         ui.label("Reflection BRDF table");
         ui.label("Some materials require the extracted 256-byte game table. Its location is remembered for the next launch.");
@@ -393,10 +460,36 @@ pub struct PreviewMesh {
     revision: Option<u64>,
     fallback_available: bool,
     pub original: Option<OriginalShaderInfo>,
-    pub description: String,
+    description: String,
+    atlas: Option<BakedAtlasLighting>,
 }
 
 impl PreviewMesh {
+    pub fn set_baked_atlas(&mut self, atlas: Option<BakedAtlasLighting>) {
+        let unchanged = match (&self.atlas, &atlas) {
+            (None, None) => true,
+            (Some(old), Some(new)) => old.same_binding(new),
+            _ => false,
+        };
+        if !unchanged {
+            self.atlas = atlas;
+            self.revision = None;
+        }
+    }
+
+    pub fn description(&self) -> String {
+        let mut text = self.description.clone();
+        if let Some(info) = &self.original {
+            if matches!(info.compiler, Compiler::Remax(_)) {
+                text.push_str(&format!(
+                    "\nAsynchronous GPU checks: {} completed",
+                    info.diagnostics.completed()
+                ));
+            }
+        }
+        text
+    }
+
     pub fn new(model: Handle<ModelAsset>, index: usize, key: MaterialKey) -> Self {
         Self {
             model,
@@ -406,11 +499,14 @@ impl PreviewMesh {
             fallback_available: false,
             original: None,
             description: "Preparing renderer".into(),
+            atlas: None,
         }
     }
 
     pub fn status(&self, preview: &ShaderPreview) -> PreviewMeshStatus {
-        if self.revision != Some(preview.revision) {
+        if self.revision != Some(preview.revision)
+            || self.original.as_ref().is_some_and(|info| info.diagnostics.pending())
+        {
             PreviewMeshStatus::Preparing
         } else if self.original.is_some() {
             PreviewMeshStatus::Original
@@ -448,14 +544,16 @@ impl PreviewMeshStatus {
 pub struct ShaderPreviewPlugin;
 impl Plugin for ShaderPreviewPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShaderPreview>()
-            .add_system(update_preview_meshes.in_base_set(CoreSet::PostUpdate));
+        app.init_resource::<ShaderPreview>().add_systems(PostUpdate, update_preview_meshes);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_preview_meshes(
     mut commands: Commands,
     device: Res<RenderDevice>,
+    adapter: Res<RenderAdapterInfo>,
+    server: Res<AssetServer>,
     mut preview: ResMut<ShaderPreview>,
     time: Res<Time>,
     mut images: ResMut<Assets<Image>>,
@@ -466,51 +564,128 @@ fn update_preview_meshes(
     mut meshes: Query<(Entity, &mut PreviewMesh, Option<&mut OriginalShaderTime>)>,
 ) {
     preview.load_pending(&mut images);
-    preview.advance_uv(time.delta_seconds_f64());
+    preview.advance_uv(time.delta_secs_f64());
     // Area instances share each prepared draw for the same model and mesh state.
     // A per-update cache avoids retaining closed models or stale image bindings.
     let mut selections = std::collections::HashMap::new();
+    let options = ShaderOptions {
+        compiler: preview.compiler,
+        features: device.features(),
+        backend: adapter.backend,
+    };
     for (entity, mut mesh, clock) in &mut meshes {
         if let Some(mut clock) = clock {
-            if clock.0 != preview.uv_seconds {
-                clock.0 = preview.uv_seconds;
+            if clock.0 != preview.animation_seconds {
+                clock.0 = preview.animation_seconds;
             }
         } else {
-            commands.entity(entity).insert(OriginalShaderTime(preview.uv_seconds));
+            commands.entity(entity).insert(OriginalShaderTime(preview.animation_seconds));
         }
         if mesh.revision == Some(preview.revision) {
+            if let Some(error) = mesh.original.as_ref().and_then(|info| info.diagnostics.failure())
+            {
+                if let Some(mut model) = models.get_mut(&mesh.model) {
+                    let fallback =
+                        model.material(&mesh.key, &mut materials, &material_resources, &textures);
+                    let mut instance = commands.entity(entity);
+                    instance.remove::<(OriginalShaderMesh, NoFrustumCulling)>();
+                    mesh.original = None;
+                    mesh.description = format!("Preview fallback; {error}");
+                    match fallback {
+                        Ok(material) => {
+                            instance.insert(MeshMaterial3d(material));
+                            mesh.fallback_available = true;
+                        }
+                        Err(error) => {
+                            mesh.fallback_available = false;
+                            mesh.description
+                                .push_str(&format!("\nPreview also unavailable: {error:#}"));
+                        }
+                    }
+                }
+            }
             continue;
         }
-        let Some(model) = models.get_mut(&mesh.model) else {
+        if preview.enabled
+            && mesh.atlas.as_ref().is_some_and(|atlas| {
+                textures.get(&atlas.texture).is_none()
+                    && !server.load_state(&atlas.texture).is_failed()
+            })
+        {
+            continue;
+        }
+        let Some(mut model) = models.get_mut(&mesh.model) else {
             continue;
         };
         let (original, fallback, description) = selections
-            .entry((mesh.model.id(), mesh.index, mesh.key.clone()))
+            .entry((
+                mesh.model.id(),
+                mesh.index,
+                mesh.key,
+                mesh.atlas.as_ref().map(|atlas| atlas.texture.id()),
+            ))
             .or_insert_with(|| {
                 let original = if preview.enabled {
                     preview.prepare_mesh(
-                        model, mesh.index, mesh.key.mesh_mirrored, &material_resources,
-                        &textures, device.features(),
+                        &model,
+                        mesh.index,
+                        mesh.key.mesh_mirrored,
+                        &material_resources,
+                        &textures,
+                        options,
+                        mesh.atlas.as_ref(),
                     )
-                } else { Err(anyhow::anyhow!("Original shaders disabled in View > Shader preview")) };
+                } else {
+                    Err(anyhow::anyhow!("Original shaders disabled in View > Shader preview"))
+                };
                 match original {
                     Ok(original) => {
                         let info = original.info();
-                        let mut description = format!("Original shaders; full-bright preview lighting\nVS source {}, PS source {}\nPermutation {:016X}{:016X}", info.sources[0], info.sources[1], info.permutation[1], info.permutation[0]);
-                        if info.animated_uv { description.push_str("\nUV animation controls: View > Shader preview"); }
+                        let mut description = format!(
+                            "{}; {}\n\
+                             VS source {}, PS source {}\n\
+                             Permutation {:016X}{:016X}",
+                            info.compiler.label(),
+                            if mesh.atlas.is_some() {
+                                "baked atlas; white modulation"
+                            } else {
+                                "full-bright preview lighting"
+                            },
+                            info.sources[0],
+                            info.sources[1],
+                            info.permutation[1],
+                            info.permutation[0],
+                        );
+                        if info.animated_uv || info.wind {
+                            description
+                                .push_str("\nMaterial animation controls: View > Shader preview");
+                        }
                         (Some(original), None, description)
                     }
                     Err(error) => {
                         let mut description = if preview.enabled {
                             format!("Preview material; original shader unavailable: {error:#}")
-                        } else { "Preview material; original shaders disabled".into() };
-                        if preview.enabled && preview.brdf.is_none() && format!("{error:#}").contains("Unresolved scene material REFP") {
-                            description.push_str("\nLoad the game's reflection BRDF table in View > Shader preview.");
+                        } else {
+                            "Preview material; original shaders disabled".into()
+                        };
+                        if preview.enabled
+                            && preview.brdf.is_none()
+                            && format!("{error:#}").contains("Unresolved scene material REFP")
+                        {
+                            description.push_str(
+                                "\nLoad the game's reflection BRDF table in View > Shader preview.",
+                            );
                         }
-                        let fallback = match model.material(&mesh.key, &mut materials, &material_resources, &textures) {
+                        let fallback = match model.material(
+                            &mesh.key,
+                            &mut materials,
+                            &material_resources,
+                            &textures,
+                        ) {
                             Ok(material) => Some(material),
                             Err(error) => {
-                                description.push_str(&format!("\nPreview also unavailable: {error:#}"));
+                                description
+                                    .push_str(&format!("\nPreview also unavailable: {error:#}"));
                                 None
                             }
                         };
@@ -519,12 +694,19 @@ fn update_preview_meshes(
                 }
             });
         let mut entity = commands.entity(entity);
-        entity.remove::<OriginalShaderMesh>().remove::<Handle<CustomMaterial>>();
-        if let Some(original) = original {
+        // Required components outlive their owner in Bevy. Restore ordinary
+        // mesh culling when returning to preview materials.
+        entity.remove::<(OriginalShaderMesh, NoFrustumCulling, MeshMaterial3d<CustomMaterial>)>();
+        let original = original.as_ref().map(|original| {
+            let mut instance = original.instance();
+            instance.baked_atlas_lookup = mesh.atlas.as_ref().map(|atlas| atlas.lookup);
+            instance
+        });
+        if let Some(original) = &original {
             entity.insert(original.clone());
         }
         if let Some(fallback) = fallback {
-            entity.insert(fallback.clone());
+            entity.insert(MeshMaterial3d(fallback.clone()));
         }
         mesh.original = original.as_ref().map(OriginalShaderMesh::info);
         mesh.fallback_available = fallback.is_some();
@@ -552,27 +734,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uv_clock_pauses_seeks_and_preserves_shader_revision() {
+    fn animation_clock_pauses_seeks_and_preserves_shader_revision() {
         let mut preview = ShaderPreview::default();
         let revision = preview.revision;
         preview.advance_uv(1.0);
-        assert_eq!(preview.uv_time(), 0.0);
-        preview.set_uv_playing(true);
+        assert_eq!(preview.animation_time(), 0.0);
+        preview.set_animation_playing(true);
         preview.advance_uv(0.25);
-        assert_eq!(preview.uv_time(), 0.25);
-        preview.set_uv_time(3.0).unwrap();
+        assert_eq!(preview.animation_time(), 0.25);
+        preview.set_animation_time(3.0).unwrap();
         preview.advance_uv(0.25);
-        assert_eq!(preview.uv_time(), 3.25);
-        preview.set_uv_playing(false);
+        assert_eq!(preview.animation_time(), 3.25);
+        preview.set_animation_playing(false);
         preview.advance_uv(100.0);
-        assert_eq!(preview.uv_time(), 3.25);
-        assert!(preview.set_uv_time(f64::NAN).is_err());
-        assert!(preview.set_uv_time(-1.0).is_err());
+        assert_eq!(preview.animation_time(), 3.25);
+        assert!(preview.set_animation_time(f64::NAN).is_err());
+        assert!(preview.set_animation_time(-1.0).is_err());
         assert_eq!(preview.revision, revision);
         preview.set_enabled(false);
-        preview.set_uv_playing(true);
+        preview.set_animation_playing(true);
         preview.advance_uv(100.0);
-        assert_eq!(preview.uv_time(), 3.25);
+        assert_eq!(preview.animation_time(), 3.25);
     }
 
     #[test]
@@ -589,8 +771,8 @@ mod tests {
         std::fs::write(&table, [0u8; ReflectionBrdfLut::BYTE_LEN]).unwrap();
         std::fs::write(&invalid, [0u8; 255]).unwrap();
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).add_plugin(AssetPlugin::default()).add_asset::<Image>();
-        let mut images = app.world.resource_mut::<Assets<Image>>();
+        app.add_plugins(MinimalPlugins).add_plugins(AssetPlugin::default()).init_asset::<Image>();
+        let mut images = app.world_mut().resource_mut::<Assets<Image>>();
         let mut preview = ShaderPreview::default();
         preview.restore_brdf_preference(preference.clone());
         assert!(preview.error.is_none() && preview.brdf.is_none());

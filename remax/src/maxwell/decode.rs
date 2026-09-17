@@ -11,9 +11,9 @@ use crate::maxwell::{
     convert::ConversionInstruction,
     integer::IntegerInstruction,
     integer_compare::IntegerComparisonInstruction,
-    memory::ConstantLoad,
+    memory::{ConstantLoad, GlobalLoad, LocalMemoryInstruction},
     raster::PixelLoad,
-    texture::{Texs, Tlds},
+    texture::{Tex, Texs, Tlds},
     xmad::XmadInstruction,
     Instruction,
 };
@@ -32,7 +32,10 @@ pub enum Operation {
     PixelLoad(PixelLoad),
     Xmad(XmadInstruction),
     ConstantLoad(ConstantLoad),
+    GlobalLoad(GlobalLoad),
+    LocalMemory(LocalMemoryInstruction),
     TextureSample(Texs),
+    TextureSampleContiguous(Tex),
     TextureLoad(Tlds),
     Nop,
     Exit,
@@ -65,8 +68,14 @@ impl Instruction {
             Operation::Xmad(v)
         } else if let Some(v) = self.constant_load() {
             Operation::ConstantLoad(v)
+        } else if let Some(v) = self.global_load() {
+            Operation::GlobalLoad(v)
+        } else if let Some(v) = self.local_memory() {
+            Operation::LocalMemory(v)
         } else if let Some(v) = self.texture_sample() {
             Operation::TextureSample(v)
+        } else if let Some(v) = self.texture_sample_contiguous() {
+            Operation::TextureSampleContiguous(v)
         } else if let Some(v) = self.texture_load() {
             Operation::TextureLoad(v)
         } else {

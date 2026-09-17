@@ -1,0 +1,23 @@
+{
+  "$schema": "../type.schema.json",
+  "name": "ModCon",
+  "type": "property_list",
+  "properties": {
+    "0xa8e2ba93": {
+      "name": "ModelContainer",
+      "type": "id"
+    },
+    "0xf068d36b": {
+      "type": "unknown",
+      "description": "CDataEnumBitField; runtime selection semantics remain unresolved."
+    },
+    "0x356db82b": {
+      "name": "RenderTargetScene",
+      "type": "enum",
+      "enum": "RenderTargetScene"
+    },
+    "0x61be7d93": {
+      "type": "bool"
+    }
+  }
+}

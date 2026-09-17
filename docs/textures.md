@@ -4,10 +4,17 @@
 
 A TXTR describes storage. A shader uses a **view** of that storage and a sampler,
 which may come from the texture defaults, material overrides or runtime scene
-state. An instruction's dimensionality is insufficient to invent a compatible
-view. In particular, layered-vine shaders have observed 2D-array accesses whose
-material assets are ordinary one-layer 2D textures; the native adaptation remains
-unresolved.
+state. Instruction coordinates and resource dimensions are distinct: layered
+materials use `ARRAY_2D` samples with ordinary one-layer 2D assets. The examined
+load, descriptor-registration and material-binding paths preserve that resource
+type; they do not construct an array view for these samples.
+
+Filtered 2D and array sampling share spatial addressing. A 2D resource behaves
+as a one-layer array, a 2D instruction selects the first layer, and an array
+layer clamps to the view range. Remax adapts the sample's layer argument while
+retaining the declared host view. This is supported by native SM75 samples and
+the emulator view implementations; SM53 texture-unit precision is not established.
+Integer texel loads retain a separate addressing contract.
 
 Material sampler overrides of `-1` inherit defaults. Runtime streaming can select
 temporary minimum-LOD variants; ordinary, bindless and sample-shading paths do
@@ -15,7 +22,10 @@ not all choose the same sampler. Loading the complete texture does not reproduce
 the streaming scheduler. View base mip/layer values accumulate relative to the
 parent; the accompanying range values are **counts**, despite misleading `max`
 names in some decompiled structures. `BuildTextureView` (`0x7100116088`) is the
-relevant engine path.
+relevant engine path for explicit views. Ordinary texture loading instead uses
+`BuildFromContext` (`0x710011516c`), followed by `RegisterTextures`
+(`0x71001133fc`); the material binder (`0x71001a6e68`) combines existing texture
+and sampler descriptor IDs.
 
 For serialized texture tokens, nil handling depends on context: a top-level
 material TXTR value still includes usage information, while a nil slot inside

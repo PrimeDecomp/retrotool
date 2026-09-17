@@ -65,14 +65,7 @@ use crate::resources::{ConstantMemory, ConstantRead};
 /// graphics wrappers discard/clip that invocation instead of returning a valid draw.
 pub const CONTROL_FLOW_BLOCK_LIMIT: u32 = 65_536;
 
-/// NVB197 SET_SHADER_CONTROL bit2 selects this for F32->integer conversion.
-/// The default is a declared host policy, not a verified MPR NVN state value.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub enum F2iNanBehavior {
-    #[default]
-    Zero,
-    Indefinite,
-}
+pub use crate::program::F2iNanBehavior;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LoweringOptions {
@@ -418,6 +411,9 @@ impl Emitter {
         ensure!(c.selector == 0, "conversion source selection is not lowered");
         let rounding = rounding_code(c.rounding);
         match c.operation {
+            ConversionOperation::FloatToFloat => {
+                bail!("F2F requires the semantic compiler's floating-rounding model")
+            }
             ConversionOperation::FloatToInteger => {
                 ensure!(
                     c.source_bits == 32 && c.destination_bits == 32,
@@ -493,6 +489,9 @@ impl Emitter {
                 let a = if negate[0] { format!("(0u - {a})") } else { a };
                 let b = if negate[1] { format!("(0u - {b})") } else { b };
                 format!("({a} + {b})")
+            }
+            IntegerOperation::ScaledAdd { .. } => {
+                anyhow::bail!("ISCADD requires the semantic compiler")
             }
             IntegerOperation::Logic {
                 operation,

@@ -1,5 +1,4 @@
 use bevy::{
-    asset::{AssetPath, LoadState},
     ecs::system::{lifetimeless::*, *},
     prelude::*,
     render::render_resource::Extent3d,
@@ -16,7 +15,7 @@ use retrolib::format::{
 
 use crate::{
     icon,
-    loaders::{package::PackageDirectory, texture::TextureAsset},
+    loaders::{package::SharedPackageInfo, texture::TextureAsset},
     tabs::{
         lightprobe::LightProbeTab, modcon::ModConTab, model::ModelTab, room::RoomTab,
         texture::TextureTab, EditorTabSystem, TabState,
@@ -33,7 +32,7 @@ enum HoverState {
     None,
     Loading {
         asset: AssetRef,
-        handle: HandleUntyped,
+        handle: Handle<TextureAsset>,
     },
     Texture {
         _handle: Handle<TextureAsset>,
@@ -55,7 +54,13 @@ pub struct ProjectTab {
 const THUMBNAIL_SIZE: f32 = 250.0;
 
 impl ProjectTab {
-    fn hover_ui(&mut self, ui: &mut egui::Ui, asset_ref: &AssetRef, server: &AssetServer) {
+    fn hover_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        asset_ref: &AssetRef,
+        server: &AssetServer,
+        state: &TabState,
+    ) {
         if matches!(&self.hover_asset, Some(aref) if aref == asset_ref) {
             match &self.hover_state {
                 HoverState::None => {}
@@ -76,16 +81,14 @@ impl ProjectTab {
                         let ratio = THUMBNAIL_SIZE / size.width as f32;
                         egui::Vec2::new(THUMBNAIL_SIZE, size.height as f32 * ratio)
                     };
-                    ui.image(*texture_id, size);
+                    ui.image((*texture_id, size));
                 }
             }
         } else {
             self.hover_asset = Some(*asset_ref);
             self.hover_state = HoverState::Loading {
                 asset: *asset_ref,
-                handle: server
-                    .load::<TextureAsset, _>(format!("{}.{}", asset_ref.id, asset_ref.kind))
-                    .into(),
+                handle: server.load(state.asset_path(*asset_ref)),
             };
         }
     }
@@ -93,7 +96,16 @@ impl ProjectTab {
 
 impl EditorTabSystem for ProjectTab {
     type LoadParam = (SRes<AssetServer>, SRes<Assets<TextureAsset>>, SResMut<EguiUserTextures>);
-    type UiParam = (SRes<AssetServer>, SRes<Assets<PackageDirectory>>);
+    type UiParam = (SRes<AssetServer>, SRes<SharedPackageInfo>);
+
+    fn clear_assets(&mut self, query: SystemParamItem<Self::LoadParam>) {
+        let (_, _, mut textures) = query;
+        if let HoverState::Texture { _image: image, .. } = &self.hover_state {
+            textures.remove_image(image);
+        }
+        self.hover_asset = None;
+        self.hover_state = HoverState::None;
+    }
 
     fn load(&mut self, query: SystemParamItem<Self::LoadParam>) {
         let (server, textures, mut egui_textures) = query;
@@ -101,11 +113,12 @@ impl EditorTabSystem for ProjectTab {
             if asset.kind != K_FORM_TXTR {
                 return;
             }
-            if server.get_load_state(handle) == LoadState::Loaded {
-                let texture_handle = handle.clone().typed::<TextureAsset>();
+            if server.load_state(handle).is_loaded() {
+                let texture_handle = handle.clone();
                 let asset = textures.get(&texture_handle).unwrap();
                 if let Some(image_handle) = asset.slices.first().and_then(|v| v.first()) {
-                    let texture_id = egui_textures.add_image(image_handle.clone_weak());
+                    let texture_id = egui_textures
+                        .add_image(bevy_egui::EguiTextureHandle::Weak(image_handle.id()));
                     self.hover_state = HoverState::Texture {
                         _handle: texture_handle,
                         _image: image_handle.clone(),
@@ -141,12 +154,18 @@ impl EditorTabSystem for ProjectTab {
             if ui.button("Collapse all").clicked() {
                 set_open = Some(false);
             }
+            if ui
+                .button("Clear")
+                .on_hover_text("Unload all PAKs and close their asset tabs")
+                .clicked()
+            {
+                state.clear_packages = true;
+            }
         });
         egui::TextEdit::singleline(&mut self.search).hint_text("Search").ui(ui);
 
-        let mut packages_sorted =
-            packages.iter().map(|(_, p)| p).collect::<Vec<&PackageDirectory>>();
-        packages_sorted.sort_by_key(|p| &p.name);
+        let mut packages_sorted = packages.indexes();
+        packages_sorted.sort_by(|a, b| a.name.cmp(&b.name));
         for package in packages_sorted {
             let search = self.search.to_ascii_lowercase();
             let search = search.trim_start_matches('{').trim_end_matches('}');
@@ -163,73 +182,81 @@ impl EditorTabSystem for ProjectTab {
             if iter.peek().is_none() {
                 continue;
             }
-            egui::CollapsingHeader::new(&package.name).open(set_open).show(ui, |ui| {
-                for entry in iter {
-                    let monospace =
-                        ui.style().text_styles.get(&egui::TextStyle::Monospace).unwrap().clone();
-                    let mut job = LayoutJob::simple(
-                        format!(
-                            "{} {} {}",
-                            match entry.kind {
-                                K_FORM_TXTR => icon::TEXTURE,
-                                K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => icon::FILE_3D,
-                                K_FORM_FMV0 => icon::FILE_MOVIE,
-                                K_FORM_ROOM | K_FORM_MCON => icon::SCENE_DATA,
-                                K_FORM_LTPB => icon::LIGHTPROBE_GRID,
-                                _ => icon::FILE,
-                            },
-                            entry.kind,
-                            entry.id
-                        ),
-                        monospace.clone(),
-                        Color32::GRAY,
-                        0.0,
-                    );
-                    for name in &entry.names {
-                        job.append(
-                            &format!("\n{name}"),
+            egui::CollapsingHeader::new(&package.name).id_salt(&package.path).open(set_open).show(
+                ui,
+                |ui| {
+                    for entry in iter {
+                        let monospace = ui
+                            .style()
+                            .text_styles
+                            .get(&egui::TextStyle::Monospace)
+                            .unwrap()
+                            .clone();
+                        let mut job = LayoutJob::simple(
+                            format!(
+                                "{} {} {}",
+                                match entry.kind {
+                                    K_FORM_TXTR => icon::TEXTURE,
+                                    K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => icon::FILE_3D,
+                                    K_FORM_FMV0 => icon::FILE_MOVIE,
+                                    K_FORM_ROOM | K_FORM_MCON => icon::SCENE_DATA,
+                                    K_FORM_LTPB => icon::LIGHTPROBE_GRID,
+                                    _ => icon::FILE,
+                                },
+                                entry.kind,
+                                entry.id
+                            ),
+                            monospace.clone(),
+                            Color32::GRAY,
                             0.0,
-                            TextFormat::simple(monospace.clone(), Color32::WHITE),
                         );
-                    }
-                    let asset_ref = AssetRef { id: entry.id, kind: entry.kind };
-                    let mut response =
-                        egui::SelectableLabel::new(state.open_assets.contains(&asset_ref), job)
-                            .ui(ui)
-                            .context_menu(|ui| {
-                                if ui.button(format!("Copy \"{}\"", entry.id)).clicked() {
-                                    ui.output_mut(|out| out.copied_text = format!("{}", entry.id));
-                                    ui.close_menu();
-                                }
-                            });
-                    if entry.kind == K_FORM_TXTR {
-                        response = response.on_hover_ui_at_pointer(|ui| {
-                            self.hover_ui(ui, &asset_ref, &server);
+                        for name in &entry.names {
+                            job.append(
+                                &format!("\n{name}"),
+                                0.0,
+                                TextFormat::simple(monospace.clone(), Color32::WHITE),
+                            );
+                        }
+                        let asset_ref = AssetRef { id: entry.id, kind: entry.kind };
+                        let mut response =
+                            egui::Button::selectable(state.open_assets.contains(&asset_ref), job)
+                                .ui(ui);
+                        response.context_menu(|ui| {
+                            if ui.button(format!("Copy \"{}\"", entry.id)).clicked() {
+                                ui.ctx().copy_text(entry.id.to_string());
+                                ui.close();
+                            }
                         });
-                    }
-                    if response.clicked() {
-                        let path: AssetPath = format!("{}.{}", entry.id, entry.kind).into();
-                        match entry.kind {
-                            K_FORM_TXTR => {
-                                state.open_tab(TextureTab::new(asset_ref, server.load(path)));
+                        if entry.kind == K_FORM_TXTR {
+                            response = response.on_hover_ui_at_pointer(|ui| {
+                                self.hover_ui(ui, &asset_ref, &server, state);
+                            });
+                        }
+                        if response.clicked() {
+                            let path = state.asset_path(asset_ref);
+                            match entry.kind {
+                                K_FORM_TXTR => {
+                                    state.open_tab(TextureTab::new(asset_ref, server.load(path)));
+                                }
+                                K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {
+                                    state.open_tab(ModelTab::new(asset_ref, server.load(path)));
+                                }
+                                K_FORM_MCON => {
+                                    state.open_tab(ModConTab::new(asset_ref, server.load(path)));
+                                }
+                                K_FORM_LTPB => {
+                                    state
+                                        .open_tab(LightProbeTab::new(asset_ref, server.load(path)));
+                                }
+                                K_FORM_ROOM => {
+                                    state.open_tab(RoomTab::new(asset_ref, server.load(path)));
+                                }
+                                _ => {}
                             }
-                            K_FORM_CMDL | K_FORM_SMDL | K_FORM_WMDL => {
-                                state.open_tab(ModelTab::new(asset_ref, server.load(path)));
-                            }
-                            K_FORM_MCON => {
-                                state.open_tab(ModConTab::new(asset_ref, server.load(path)));
-                            }
-                            K_FORM_LTPB => {
-                                state.open_tab(LightProbeTab::new(asset_ref, server.load(path)));
-                            }
-                            K_FORM_ROOM => {
-                                state.open_tab(RoomTab::new(asset_ref, server.load(path)));
-                            }
-                            _ => {}
                         }
                     }
-                }
-            });
+                },
+            );
         }
     }
 

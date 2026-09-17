@@ -1,174 +1,245 @@
+//! Bevy adapter for ordered package sessions. The catalog and request identities
+//! do not depend on Bevy's asset lifetime or completion order.
+
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 
-use anyhow::Error;
+use anyhow::{Context, Result};
 use bevy::{
-    app::{App, Plugin},
-    asset::{AssetIo, AssetIoError, AssetLoader, BoxedFuture, LoadContext, LoadedAsset, Metadata},
+    asset::{
+        io::{AssetReader, AssetReaderError, AssetSourceBuilder, PathStream, Reader, VecReader},
+        AssetLoader, AssetPath, LoadContext,
+    },
     prelude::*,
 };
-use retrolib::{
-    format::pack::{Package, SparsePackageEntry},
-    util::file::map_file,
-};
-use uuid::Uuid;
+use event_listener::Event;
+use retrolib::{format::pack::Package, util::file::map_file};
 use zerocopy::LittleEndian;
 
-#[derive(Debug, Clone, Resource)]
+use crate::AssetRef;
+
+mod catalog;
+pub use catalog::PackageIndex;
+use catalog::{Catalog, PackageKey, Resolution};
+
+const SOURCE: &str = "mpr";
+
+pub fn asset_path(session: u64, asset: AssetRef) -> AssetPath<'static> {
+    AssetPath::from(catalog::asset_path(session, asset)).with_source(SOURCE)
+}
+
+/// Dependencies stay in the requesting asset's session, including loads that
+/// complete after Clear. They must never acquire the application's new session.
+pub fn dependency_path(parent: &AssetPath<'_>, asset: AssetRef) -> Result<AssetPath<'static>> {
+    let (session, _) =
+        catalog::asset_request(parent.path()).context("Asset has no package session")?;
+    Ok(asset_path(session, asset))
+}
+
+#[derive(Clone, Resource, Default)]
 pub struct SharedPackageInfo {
-    packages: Arc<RwLock<Vec<PackageDirectory>>>,
+    catalog: Arc<RwLock<Catalog>>,
+    changed: Arc<Event>,
 }
 
-struct RetroAssetIo {
-    default: Box<dyn AssetIo>,
-    packages: SharedPackageInfo,
-}
+impl SharedPackageInfo {
+    pub fn session(&self) -> u64 { self.catalog.read().unwrap().session() }
 
-fn read_pak_header(path: &Path) -> anyhow::Result<Vec<u8>> {
-    let data = map_file(path)?;
-    Package::<LittleEndian>::read_header(&data)
-}
+    pub fn indexes(&self) -> Vec<Arc<PackageIndex>> { self.catalog.read().unwrap().indexes() }
 
-fn read_asset(path: &Path, id: Uuid) -> anyhow::Result<Vec<u8>> {
-    let data = map_file(path)?;
-    Package::<LittleEndian>::read_asset(&data, id)
-}
+    fn clear(&self) {
+        self.catalog.write().unwrap().clear();
+        self.changed.notify(usize::MAX);
+    }
 
-impl AssetIo for RetroAssetIo {
-    fn load_path<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> BoxedFuture<'a, anyhow::Result<Vec<u8>, AssetIoError>> {
-        if let Some(id) =
-            path.file_stem().and_then(|name| Uuid::try_parse(&name.to_string_lossy()).ok())
-        {
-            // Find pak for UUID and load asset
-            Box::pin(async move {
-                let mut package_path: Option<PathBuf> = None;
-                if let Ok(packages) = self.packages.packages.read() {
-                    if let Some(package) =
-                        packages.iter().find(|p| p.entries.iter().any(|e| e.id == id))
-                    {
-                        // log::info!("Loading {} from {}", id, package.path.display());
-                        package_path = Some(package.path.clone());
-                    }
-                }
-                let Some(package_path) = package_path else {
-                    return Err(AssetIoError::NotFound(path.to_owned()));
-                };
-                read_asset(&package_path, id)
-                    .map_err(|e| AssetIoError::Io(std::io::Error::other(e)))
-            })
-        } else if path.extension() == Some("pak".as_ref()) {
-            // Load pak header only
-            Box::pin(async move {
-                read_pak_header(path).map_err(|e| AssetIoError::Io(std::io::Error::other(e)))
-            })
-        } else {
-            self.default.load_path(path)
+    fn package_path(&self, key: PackageKey) -> Result<PathBuf> {
+        self.catalog
+            .read()
+            .unwrap()
+            .path(key)
+            .map(Path::to_owned)
+            .context("Package request belongs to a cleared session")
+    }
+
+    fn publish(&self, key: PackageKey, index: Arc<PackageIndex>) {
+        if self.catalog.write().unwrap().publish(key, index) {
+            self.changed.notify(usize::MAX);
         }
     }
 
-    fn read_directory(
-        &self,
-        path: &Path,
-    ) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf>>, AssetIoError> {
-        self.default.read_directory(path)
-    }
-
-    fn get_metadata(&self, path: &Path) -> anyhow::Result<Metadata, AssetIoError> {
-        self.default.get_metadata(path)
-    }
-
-    fn watch_path_for_changes(
-        &self,
-        to_watch: &Path,
-        to_reload: Option<PathBuf>,
-    ) -> anyhow::Result<(), AssetIoError> {
-        self.default.watch_path_for_changes(to_watch, to_reload)
-    }
-
-    fn watch_for_changes(&self) -> anyhow::Result<(), AssetIoError> {
-        self.default.watch_for_changes()
+    async fn resolve(&self, session: u64, asset: AssetRef) -> Option<PathBuf> {
+        loop {
+            // Listen before inspecting the catalog to avoid losing a completion
+            // between the read and await. No lock is held across I/O or suspension.
+            let changed = self.changed.listen();
+            let resolution = self.catalog.read().unwrap().resolve(session, asset);
+            match resolution {
+                Resolution::Ready(path) => return Some(path),
+                Resolution::Missing => return None,
+                Resolution::Pending => changed.await,
+            }
+        }
     }
 }
 
-pub struct RetroAssetIoPlugin;
+#[derive(Resource)]
+pub struct PackageSession {
+    shared: SharedPackageInfo,
+    requests: Vec<PackageRequest>,
+}
 
-impl Plugin for RetroAssetIoPlugin {
+struct PackageRequest {
+    key: PackageKey,
+    handle: Handle<PackageDirectory>,
+    settled: bool,
+}
+
+impl PackageSession {
+    pub(crate) fn new(shared: SharedPackageInfo) -> Self { Self { shared, requests: vec![] } }
+
+    pub fn open(&mut self, server: &AssetServer, path: &Path) -> Result<()> {
+        let path = path.canonicalize().with_context(|| format!("Opening {}", path.display()))?;
+        let (key, new) = self.shared.catalog.write().unwrap().request(path);
+        if new {
+            self.requests.push(PackageRequest {
+                key,
+                handle: server.load(AssetPath::from(key.path()).with_source(SOURCE)),
+                settled: false,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn clear(&mut self) {
+        self.shared.clear();
+        self.requests.clear();
+    }
+}
+
+struct PackageReader(SharedPackageInfo);
+
+impl AssetReader for PackageReader {
+    async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
+        let result = if let Some((session, asset)) = catalog::asset_request(path) {
+            let package = self
+                .0
+                .resolve(session, asset)
+                .await
+                .ok_or_else(|| AssetReaderError::NotFound(path.to_owned()))?;
+            map_file(package).and_then(|data| Package::<LittleEndian>::read_asset(&data, asset.id))
+        } else if let Some(key) = PackageKey::parse(path) {
+            self.0.package_path(key).and_then(|path| {
+                let data = map_file(path)?;
+                Package::<LittleEndian>::read_header(&data)
+            })
+        } else {
+            return Err(AssetReaderError::NotFound(path.to_owned()));
+        };
+        result.map(VecReader::new).map_err(|error| std::io::Error::other(error).into())
+    }
+
+    async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<VecReader, AssetReaderError> {
+        // The package's TOCC and resource footer provide game metadata; there
+        // are no Bevy .meta sidecars in this source.
+        Err(AssetReaderError::NotFound(path.to_owned()))
+    }
+
+    async fn read_directory<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Result<Box<PathStream>, AssetReaderError> {
+        Err(AssetReaderError::NotFound(path.to_owned()))
+    }
+
+    async fn is_directory<'a>(&'a self, _path: &'a Path) -> Result<bool, AssetReaderError> {
+        Ok(false)
+    }
+}
+
+pub struct PackageSourcePlugin;
+
+impl Plugin for PackageSourcePlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(feature = "embed")]
-        let default = Box::new(bevy_embedded_assets::EmbeddedAssetIo::preloaded());
-        #[cfg(not(feature = "embed"))]
-        let default = AssetPlugin::default().create_platform_default_asset_io();
-        let shared_package_info = SharedPackageInfo { packages: Arc::new(Default::default()) };
-        let asset_io = RetroAssetIo { default, packages: shared_package_info.clone() };
-        app.insert_resource(shared_package_info);
-        app.insert_resource(AssetServer::new(asset_io));
+        let packages = SharedPackageInfo::default();
+        let reader = packages.clone();
+        app.register_asset_source(
+            SOURCE,
+            AssetSourceBuilder::new(move || Box::new(PackageReader(reader.clone()))),
+        );
+        app.insert_resource(PackageSession::new(packages.clone()));
+        app.insert_resource(packages);
     }
 }
 
 pub fn package_loader_system(
-    mut ev_asset: EventReader<AssetEvent<PackageDirectory>>,
+    mut events: MessageReader<AssetEvent<PackageDirectory>>,
     assets: Res<Assets<PackageDirectory>>,
-    package_info: Res<SharedPackageInfo>,
+    server: Res<AssetServer>,
+    mut session: ResMut<PackageSession>,
+    packages: Res<SharedPackageInfo>,
 ) {
-    for ev in ev_asset.iter() {
-        match ev {
-            AssetEvent::Created { handle } => {
-                let package = assets.get(handle).unwrap();
-                log::info!("Loaded package {}", package.path.display());
-                let mut package_info =
-                    package_info.packages.write().expect("Failed to lock shared package info");
-                package_info.push(package.clone());
+    for event in events.read() {
+        let id = match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => *id,
+            _ => continue,
+        };
+        // Removed assets are already gone. Late events from a cleared session
+        // are ignored even if the asset server has not released its cache yet.
+        if let Some(request) = session.requests.iter_mut().find(|request| request.handle.id() == id)
+        {
+            if let Some(directory) = assets.get(id) {
+                packages.publish(request.key, directory.0.clone());
+                request.settled = true;
             }
-            AssetEvent::Modified { .. } => {}
-            AssetEvent::Removed { handle } => {
-                let package = assets.get(handle).unwrap();
-                let mut package_info =
-                    package_info.packages.write().expect("Failed to lock shared package info");
-                package_info.retain(|p| p.path != package.path);
-            }
+        }
+    }
+    for request in session.requests.iter_mut().filter(|request| !request.settled) {
+        if server.load_state(request.handle.id()).is_failed() {
+            packages.catalog.write().unwrap().fail(request.key);
+            request.settled = true;
+            log::error!(
+                "Package failed to load: {}",
+                packages.package_path(request.key).unwrap().display()
+            );
+            packages.changed.notify(usize::MAX);
         }
     }
 }
 
-#[derive(Debug, Clone, bevy::reflect::TypeUuid)]
-#[uuid = "83269869-1209-408e-8835-bc6f2496e827"]
-pub struct PackageDirectory {
-    pub path: PathBuf,
-    pub name: String,
-    pub entries: Vec<SparsePackageEntry>,
-}
+#[derive(Debug, Clone, Deref, Asset, TypePath)]
+pub struct PackageDirectory(Arc<PackageIndex>);
 
-pub struct PackageAssetLoader;
+#[derive(TypePath)]
+pub struct PackageAssetLoader(SharedPackageInfo);
 
 impl FromWorld for PackageAssetLoader {
-    fn from_world(_world: &mut World) -> Self { Self }
+    fn from_world(world: &mut World) -> Self { Self(world.resource::<SharedPackageInfo>().clone()) }
 }
 
 impl AssetLoader for PackageAssetLoader {
-    fn load<'a>(
-        &'a self,
-        bytes: &'a [u8],
-        load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, anyhow::Result<(), Error>> {
-        Box::pin(async move {
-            load_context.set_default_asset(LoadedAsset::new(PackageDirectory {
-                path: load_context.path().to_owned(),
-                name: load_context
-                    .path()
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
-                entries: Package::<LittleEndian>::read_sparse(bytes)?,
-            }));
-            Ok(())
-        })
+    type Asset = PackageDirectory;
+    type Error = anyhow::Error;
+    type Settings = ();
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        context: &mut LoadContext<'_>,
+    ) -> Result<PackageDirectory> {
+        let key =
+            PackageKey::parse(context.path().path()).context("Package has no session identity")?;
+        let path = self.0.package_path(key)?;
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        let index = PackageIndex::new(path, Package::<LittleEndian>::read_sparse(&bytes)?);
+        Ok(PackageDirectory(Arc::new(index)))
     }
 
     fn extensions(&self) -> &[&str] { &["pak"] }
 }
+
+#[cfg(test)]
+mod tests;

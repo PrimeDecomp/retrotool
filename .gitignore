@@ -1,5 +1,7 @@
 /.idea
 /out
 /target
+/remax/target
+/render-tests/target
 /research/
 /.cargo/config.toml

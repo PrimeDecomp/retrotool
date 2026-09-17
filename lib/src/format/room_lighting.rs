@@ -14,6 +14,7 @@ use super::CObjectId;
 pub const LIGHT_STATIC_COMPONENT: u32 = 0x2be8bc19;
 pub const ROOM_SETTINGS_COMPONENT: u32 = 0x160e9af9;
 pub const ROOM_CONTROLLER_COMPONENT: u32 = 0x83cc17aa;
+pub const BAKED_LIGHTING_PRIORITY_MODIFIER_COMPONENT: u32 = 0x9feab9b3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptProperty {
@@ -99,6 +100,33 @@ impl RoomControllerProperties {
             if property.id == 0x30a4d63d {
                 ensure!(property.data.len() == 16, "Wrong size for RoomController room ID");
                 result.room_id = Cursor::new(&property.data).read_le()?;
+            }
+        }
+        result.properties = properties;
+        Ok(result)
+    }
+}
+
+/// SLdrBakedLightingPriorityModifierMP1::Load7100f9118c. Active EntityLoaded and
+/// activation-change callbacks set the owning area's context priority. Inactive
+/// callbacks do nothing; there is no corresponding restore on deactivation.
+#[derive(Clone, Debug)]
+pub struct BakedLightingPriorityModifierProperties {
+    pub priority: i32,
+    pub properties: Vec<ScriptProperty>,
+}
+
+impl Default for BakedLightingPriorityModifierProperties {
+    fn default() -> Self { Self { priority: 1, properties: Vec::new() } }
+}
+
+impl BakedLightingPriorityModifierProperties {
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let properties = ScriptProperty::parse_list(data)?;
+        let mut result = Self::default();
+        for property in &properties {
+            if property.id == 0x8582d268 {
+                result.priority = property.words::<1>()?[0] as i32;
             }
         }
         result.properties = properties;
@@ -296,6 +324,24 @@ mod tests {
         assert_eq!(p.room_id, expected);
         assert_eq!(p.properties.len(), 3);
         assert!(RoomControllerProperties::parse(&list(&[(0x30a4d63d, &[0; 15])])).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn baked_priority_defaults_and_signed_duplicate_values() -> Result<()> {
+        assert_eq!(BakedLightingPriorityModifierProperties::parse(&[0, 0])?.priority, 1);
+        let bytes = list(&[
+            (0x8582d268, &8i32.to_le_bytes()),
+            (0x12345678, &[1, 2, 3]),
+            (0x8582d268, &(-4i32).to_le_bytes()),
+        ]);
+        let property = BakedLightingPriorityModifierProperties::parse(&bytes)?;
+        assert_eq!(property.priority, -4);
+        assert_eq!(property.properties.len(), 3);
+        assert_eq!(property.properties[1].data, [1, 2, 3]);
+        assert!(
+            BakedLightingPriorityModifierProperties::parse(&list(&[(0x8582d268, &[1])])).is_err()
+        );
         Ok(())
     }
 

@@ -2,10 +2,9 @@ use std::collections::HashMap;
 
 use bevy::{
     asset::LoadState,
-    core_pipeline::{clear_color::ClearColorConfig, tonemapping::Tonemapping},
+    camera::{visibility::RenderLayers, Viewport},
     ecs::system::{lifetimeless::*, *},
     prelude::*,
-    render::{camera::Viewport, view::RenderLayers},
 };
 use bevy_egui::EguiUserTextures;
 use egui::Widget;
@@ -21,14 +20,11 @@ use crate::{
         model::{MaterialKey, ModelAsset},
         texture::TextureAsset,
     },
-    material::CustomMaterial,
     render::{
         camera::ModelCamera,
         convert_aabb,
-        grid::GridSettings,
         model::{load_model, ModelLod},
         scene_preview::{PreviewMesh, PreviewMeshStatus, ShaderPreview},
-        TemporaryLabel,
     },
     tabs::{
         property_with_value,
@@ -71,13 +67,13 @@ impl ModelTab {
     }
 
     fn get_load_state(&self, server: &AssetServer, models: &Assets<ModelAsset>) -> LoadState {
-        match server.get_load_state(&self.handle) {
+        match server.load_state(&self.handle) {
             LoadState::Loaded => {}
             state => return state,
         };
         let asset = match models.get(&self.handle) {
             Some(v) => v,
-            None => return LoadState::Failed,
+            None => return LoadState::NotLoaded,
         };
         // Ensure all dependencies loaded
         asset.get_load_state(server)
@@ -89,7 +85,7 @@ impl EditorTabSystem for ModelTab {
         SCommands,
         SResMut<Assets<Mesh>>,
         SResMut<Assets<ModelAsset>>,
-        SResMut<Assets<TextureAsset>>,
+        SRes<Assets<TextureAsset>>,
         SResMut<Assets<Image>>,
         SResMut<AssetServer>,
         SResMut<EguiUserTextures>,
@@ -107,21 +103,21 @@ impl EditorTabSystem for ModelTab {
             mut commands,
             mut meshes,
             mut models,
-            mut texture_assets,
+            texture_assets,
             mut images,
             server,
             mut egui_textures,
         ) = query;
         if let Some(loaded) = &self.loaded {
             for mesh in &loaded.meshes {
-                if let Some(mut commands) = commands.get_entity(mesh.entity) {
+                if let Ok(mut commands) = commands.get_entity(mesh.entity) {
                     commands.insert(Visibility::Hidden);
                 }
             }
             return;
         }
 
-        let asset = match models.get_mut(&self.handle) {
+        let mut asset = match models.get_mut(&self.handle) {
             Some(v) => v,
             None => return,
         };
@@ -131,8 +127,8 @@ impl EditorTabSystem for ModelTab {
             _ => return,
         }
 
-        asset.build_texture_images(&mut texture_assets, &mut images);
-        let result = load_model(asset, &mut meshes);
+        asset.build_texture_images(&texture_assets, &mut images);
+        let result = load_model(&asset, &mut meshes);
         let built = match result {
             Ok(value) => value,
             Err(e) => {
@@ -142,14 +138,7 @@ impl EditorTabSystem for ModelTab {
         };
         let mut meshes = Vec::with_capacity(built.meshes.len());
         for (mesh_index, mesh) in built.meshes.into_iter().enumerate() {
-            let entity = commands
-                .spawn(MaterialMeshBundle::<CustomMaterial> {
-                    mesh: mesh.mesh,
-                    // transform: Transform::from_translation((-built.aabb.center).into()),
-                    visibility: Visibility::Hidden,
-                    ..default()
-                })
-                .id();
+            let entity = commands.spawn((Mesh3d(mesh.mesh), Visibility::Hidden)).id();
             commands.entity(entity).insert(PreviewMesh::new(
                 self.handle.clone(),
                 mesh_index,
@@ -188,10 +177,11 @@ impl EditorTabSystem for ModelTab {
 
     fn close(&mut self, query: SystemParamItem<Self::LoadParam>) -> bool {
         let (mut commands, _, _, _, _, _, _) = query;
+        self.camera.close(&mut commands);
         if let Some(loaded) = &self.loaded {
             for mesh in &loaded.meshes {
-                if let Some(commands) = commands.get_entity(mesh.entity) {
-                    commands.despawn_recursive();
+                if let Ok(mut commands) = commands.get_entity(mesh.entity) {
+                    commands.despawn();
                 }
             }
         }
@@ -215,51 +205,21 @@ impl EditorTabSystem for ModelTab {
         };
         let response =
             ui.interact(rect, ui.make_persistent_id("background"), egui::Sense::click_and_drag());
-        self.camera.update(&rect, &response, ui.input(|i| i.scroll_delta));
+        self.camera.update(&rect, &response, ui.input(|i| i.smooth_scroll_delta));
 
         let (mut commands, server, models, preview_meshes, preview) = query;
         if let Some(loaded) = &mut self.loaded {
-            commands.spawn((
-                Camera3dBundle {
-                    camera_3d: Camera3d { clear_color: ClearColorConfig::None, ..default() },
-                    camera: Camera {
-                        viewport: Some(viewport),
-                        order: state.render_layer as isize,
-                        // hdr: true,
-                        ..default()
-                    },
-                    tonemapping: Tonemapping::TonyMcMapface,
-                    transform: self.camera.transform,
-                    ..default()
-                },
-                // BloomSettings::default(),
-                EnvironmentMapLight {
+            self.camera.show(
+                &mut commands,
+                viewport,
+                state.render_layer,
+                Some(EnvironmentMapLight {
                     diffuse_map: self.diffuse_map.clone(),
                     specular_map: self.specular_map.clone(),
-                },
-                GridSettings {
-                    clear_color: if state.render_layer == 0 {
-                        ClearColorConfig::Default
-                    } else {
-                        ClearColorConfig::None
-                    },
-                },
-                RenderLayers::layer(state.render_layer),
-                TemporaryLabel,
-            ));
-            // FIXME: https://github.com/bevyengine/bevy/issues/3462
-            if state.render_layer == 0 {
-                // commands.spawn((
-                //     DirectionalLightBundle {
-                //         directional_light: DirectionalLight { ..default() },
-                //         transform: Transform::from_xyz(-30.0, 5.0, 20.0)
-                //             .looking_at(Vec3::ZERO, Vec3::Y),
-                //         ..default()
-                //     },
-                //     RenderLayers::layer(state.render_layer),
-                //     TemporaryLabel,
-                // ));
-            }
+                    intensity: 1.0,
+                    ..default()
+                }),
+            );
 
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(rect.height() * 0.25).show(ui, |ui| {
@@ -291,9 +251,10 @@ impl EditorTabSystem for ModelTab {
                                     loaded.materials[mesh.material_idx].name
                                 ),
                             )
-                            .on_hover_text(
-                                renderer.map_or("Preparing renderer", |r| r.description.as_str()),
-                            );
+                            .on_hover_text(renderer.map_or_else(
+                                || "Preparing renderer".to_string(),
+                                |r| r.description(),
+                            ));
                             let status = renderer
                                 .map_or(PreviewMeshStatus::Preparing, |r| r.status(&preview));
                             let color = match status {
@@ -302,10 +263,10 @@ impl EditorTabSystem for ModelTab {
                                 _ => ui.visuals().text_color(),
                             };
                             ui.label(egui::RichText::new(status.label()).small().color(color))
-                                .on_hover_text(
-                                    renderer
-                                        .map_or("Preparing renderer", |r| r.description.as_str()),
-                                );
+                                .on_hover_text(renderer.map_or_else(
+                                    || "Preparing renderer".to_string(),
+                                    |r| r.description(),
+                                ));
                             if !matches!(mesh.unk_c, 0 | 1) {
                                 ui.colored_label(
                                     egui::Color32::RED,
@@ -326,7 +287,7 @@ impl EditorTabSystem for ModelTab {
                                 self.selected_material = Some(mesh.material_idx);
                             }
                         });
-                        if let Some(mut commands) = commands.get_entity(mesh.entity) {
+                        if let Ok(mut commands) = commands.get_entity(mesh.entity) {
                             commands.insert((
                                 if mesh.visible { Visibility::Visible } else { Visibility::Hidden },
                                 RenderLayers::layer(state.render_layer),
@@ -353,7 +314,7 @@ impl EditorTabSystem for ModelTab {
                                     for renderer in loaded.meshes.iter()
                                         .filter(|m| m.material_idx == material_idx)
                                         .filter_map(|m| preview_meshes.get(m.entity).ok())
-                                        .map(|r| r.description.as_str())
+                                        .map(|r| r.description())
                                         .collect::<std::collections::BTreeSet<_>>() {
                                         ui.label(renderer);
                                     }
@@ -399,7 +360,7 @@ impl EditorTabSystem for ModelTab {
         } else {
             ui.centered_and_justified(|ui| {
                 match self.get_load_state(&server, &models) {
-                    LoadState::Failed => egui::Label::new(
+                    LoadState::Failed(_) => egui::Label::new(
                         egui::RichText::from("Loading failed").heading().color(egui::Color32::RED),
                     )
                     .ui(ui),
@@ -438,7 +399,7 @@ fn texture_ui(
         {
             state.open_tab(TextureTab::new(
                 AssetRef { id: texture.id, kind: K_FORM_TXTR },
-                server.load(format!("{}.{}", texture.id, K_FORM_TXTR)),
+                server.load(state.asset_path(AssetRef { id: texture.id, kind: K_FORM_TXTR })),
             ));
         }
     }

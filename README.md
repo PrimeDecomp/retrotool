@@ -80,7 +80,6 @@ $ retrotool refl probe.REFL
 
 `retrotool-gui` browses PAK assets and previews models. **View > Shader preview**
 toggles translated original shaders and controls UV animation playback.
-Unsupported materials show a fallback reason. Lighting is still a preview.
 
 Reflection materials need the game's BRDF table, selected in the same menu or
 with `--brdf-lut`; the viewer remembers successful loads.

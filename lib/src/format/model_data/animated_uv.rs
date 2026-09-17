@@ -30,42 +30,9 @@ pub struct ModelAnimatedUvData {
     pub flags: u8,
 }
 
-struct Reader<'a> {
-    remaining: &'a [u8],
-}
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        ensure!(n <= self.remaining.len(), "Truncated animated UV data");
-        let (v, tail) = self.remaining.split_at(n);
-        self.remaining = tail;
-        Ok(v)
-    }
-
-    fn word(&mut self) -> Result<u32> { Ok(u32::from_le_bytes(self.take(4)?.try_into()?)) }
-
-    fn count(&mut self, stride: usize) -> Result<usize> {
-        let n = self.word()? as usize;
-        ensure!(n <= self.remaining.len() / stride, "Invalid animated UV count");
-        Ok(n)
-    }
-}
+use super::Reader;
 
 impl ModelAnimatedUvData {
-    /// The first HEAD data source, when it is ANUV. Later source records are
-    /// unframed and require their own readers before they can be searched.
-    /// The caller retains all remaining bytes; absence here does not claim that
-    /// no later ANUV source exists.
-    pub fn first_in_header(data_sources: &[u8]) -> Result<Option<Self>> {
-        let mut r = Reader { remaining: data_sources };
-        if r.word()? == 0 {
-            return Ok(None);
-        }
-        if r.take(4)? != b"ANUV" {
-            return Ok(None);
-        }
-        Ok(Some(Self::parse(r.remaining)?.0))
-    }
-
     /// Read one ANUV source body; return the untouched following header bytes.
     pub fn parse(bytes: &[u8]) -> Result<(Self, &[u8])> {
         let mut r = Reader { remaining: bytes };
@@ -176,8 +143,8 @@ impl AnimatedUvSnapshot {
         &self,
         option: u32,
         flags: u32,
-    ) -> Result<Vec<super::shader_nvn_uniforms::NvnUniformValue<'_>>> {
-        use super::shader_nvn_uniforms::NvnUniformValue;
+    ) -> Result<Vec<crate::format::shader_nvn_uniforms::NvnUniformValue<'_>>> {
+        use crate::format::shader_nvn_uniforms::NvnUniformValue;
         Ok(match option {
             0 | 3 => vec![],
             1 => self.transforms[..if flags & 1 == 0 { 1 } else { 3 }]
